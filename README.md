@@ -1,5 +1,18 @@
 # Fashion_E-commerce_Web_App
+
+Phát triển ứng dụng web thương mại điện tử thời trang full-stack sử dụng React (TypeScript), Node.js, Tailwind CSS và MongoDB.
+Cho phép người dùng: Đặt hàng, Thêm sản phẩm vào danh sách yêu thích, Xem lịch sử mua hàng.
+Tích hợp hệ thống chat thời gian thực giữa người dùng và người bán bằng Socket.IO để tăng mức độ tương tác.
+Áp dụng hệ thống gợi ý lai (hybrid recommendation) gồm: Dựa trên nội dung sản phẩm, Dựa trên hành vi người dùng tương tự (collaborative filtering), Xu hướng sản phẩm thịnh hành, Cá nhân hóa theo từng người dùng
+Xây dựng giao diện quản trị (Admin Dashboard) hỗ trợ:
+Quản lý đơn hàng, Theo dõi khách hàng, Dự đoán khách hàng rời bỏ (churn prediction)
+Tự động tóm tắt đánh giá sản phẩm bằng API Gemini để giúp người dùng hiểu nhanh về chất lượng sản phẩm.
+Bảo mật xác thực và kiểm soát phiên làm việc bằng JWT.
+
+
  Link Demo: https://www.youtube.com/watch?v=YgyP0moKiq4
+
+ 
 
 ## Client Pages:
 
