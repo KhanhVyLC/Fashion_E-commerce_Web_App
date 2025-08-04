@@ -70,8 +70,8 @@
 <img width="1918" height="957" alt="image" src="https://github.com/user-attachments/assets/9985b715-71a6-45e8-bcba-bbb9b74c53d1" />
 
 ----------------
+<img width="1897" height="1012" alt="image" src="https://github.com/user-attachments/assets/64de9a31-cc30-4414-bfdf-e582df386f0f" />
 
-<img width="1897" height="1012" alt="image" src="https://github.com/user-attachments/assets/d592662a-8889-4047-8291-9b49564cb16c" />
 
 
 
