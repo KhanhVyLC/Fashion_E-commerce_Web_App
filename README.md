@@ -1,93 +1,29 @@
-# Fashion_E-commerce_Web_App
+## 🛍️ E-commerce Fashion Web Application – **Fullstack Developer (MERN Stack)**
 
-Phát triển ứng dụng web thương mại điện tử thời trang sử dụng React (TypeScript), Node.js, Tailwind CSS và MongoDB.
-Cho phép người dùng: Đặt hàng, Thêm sản phẩm vào danh sách yêu thích, Xem lịch sử mua hàng.
-Tích hợp hệ thống chat thời gian thực giữa người dùng và người bán bằng Socket.IO để tăng mức độ tương tác.
-Áp dụng hệ thống gợi ý lai (hybrid recommendation) gồm: Dựa trên nội dung sản phẩm, Dựa trên hành vi người dùng tương tự (collaborative filtering), Xu hướng sản phẩm thịnh hành, Cá nhân hóa theo từng người dùng
-Xây dựng giao diện quản trị (Admin Dashboard) hỗ trợ:
-Quản lý đơn hàng, Theo dõi khách hàng, Dự đoán khách hàng rời bỏ (churn prediction)
-Tự động tóm tắt đánh giá sản phẩm bằng API Gemini để giúp người dùng hiểu nhanh về chất lượng sản phẩm.
-Bảo mật xác thực và kiểm soát phiên làm việc bằng JWT.
+- Developed a **full-stack e-commerce platform** using the **MERN stack** (**MongoDB, Express.js, React, Node.js**) with **TypeScript** for enhanced type safety.  
 
+### 👤 Client Features
+- **User Authentication** with **JWT** and session management.  
+- **Product Catalog** with detailed product pages.  
+- **Product Ordering** and checkout flow.  
+- **Wishlist** to save favorite items.  
+- **Purchase History** for order tracking.  
+- **QR-based Payment** integration.  
+- **Vouchers** and **Flash Sale** participation.  
+- **Real-time Chat** with sellers for support and negotiation.  
+- **Personalized Recommendations** powered by a hybrid **Recommendation Engine** (Content-Based Filtering, Collaborative Filtering, Trending, New Arrivals, Complementary Products).  
+- **Automatic Product Review Summarization** using **Gemini API** to improve user experience.  
 
- Link Demo: https://www.youtube.com/watch?v=YgyP0moKiq4
+### 🛠️ Admin Features
+- **Dashboard**: Overview of key metrics and system performance.  
+- **Product Management**: Create, update, and manage product catalog.  
+- **Order Management**: Track and process customer orders.  
+- **Customer Management**: View and manage customer profiles.  
+- **Voucher Management**: Create and control promotional vouchers.  
+- **Review Management**: Moderate customer reviews and feedback.  
+- **Recommendation Control**: Manage and adjust recommendation engine rules.  
+- **Chat System**: Real-time communication with customers.  
+- **Flash Sale Management**: Configure and monitor flash sales.  
+- **Analytics**: Customer analytics, **churn prediction**, and **sales insights**.  
 
- 
-
-## Client Pages:
-
-<img width="1385" height="1033" alt="image" src="https://github.com/user-attachments/assets/4358e126-8d17-4a78-abf9-6dea57abe9bf" />
-
----------------------
-
-
-<img width="1392" height="1022" alt="image" src="https://github.com/user-attachments/assets/da668350-8385-45a9-8b1f-0387847b3f6c" />
-
--------------------
-
-
-<img width="1551" height="992" alt="image" src="https://github.com/user-attachments/assets/c1cb8831-230f-4e21-a900-4f65e2ded425" />
-
---------------------
-
-
-<img width="1432" height="1037" alt="image" src="https://github.com/user-attachments/assets/25fcf979-4031-43f8-9bb3-e2b9c33145dc" />
-
-------------------
-
-
-<img width="1277" height="1038" alt="image" src="https://github.com/user-attachments/assets/f0bfe919-cfa4-41d0-b574-02733a825dc5" />
-
-----------
-
-
-<img width="1405" height="962" alt="image" src="https://github.com/user-attachments/assets/df05ba67-f8d7-45ac-9070-dd56d9c47895" />
-
-----
-
-
-<img width="1363" height="1037" alt="image" src="https://github.com/user-attachments/assets/db7c6f49-8c1d-475d-876c-83ec94e9c205" />
-
------------------------------------
-
-
-<img width="1326" height="966" alt="image" src="https://github.com/user-attachments/assets/0c16771f-6e1b-4232-ad78-50c0325d7138" />
-
----------------------------------------
-
-
-<img width="1228" height="1032" alt="image" src="https://github.com/user-attachments/assets/68ee409f-f1aa-4721-bb43-1bb5e32381dd" />
-
-----------------------------------------------------------------------------------
-
-## Admin Pages:
-
-<img width="1900" height="1023" alt="image" src="https://github.com/user-attachments/assets/237cc213-af62-4d22-b6e8-7f5715c37403" />
-
-------------------
-
-
-<img width="1918" height="1022" alt="image" src="https://github.com/user-attachments/assets/ed90f896-61b7-4dc7-a7fb-6ab17e8ab4bf" />
-
--------------------
-
-<img width="1918" height="972" alt="image" src="https://github.com/user-attachments/assets/99111fa2-7864-4526-a7a6-8006cf1e68be" />
-
------------------------
-
-
-<img width="1918" height="967" alt="image" src="https://github.com/user-attachments/assets/f82d0767-05a7-4204-a073-227b7d7a7e2d" />
-
------------
-
-<img width="1918" height="957" alt="image" src="https://github.com/user-attachments/assets/9985b715-71a6-45e8-bcba-bbb9b74c53d1" />
-
-----------------
-<img width="1897" height="1012" alt="image" src="https://github.com/user-attachments/assets/64de9a31-cc30-4414-bfdf-e582df386f0f" />
-
-
-
-
-
-
-
+**Outcome:** Delivered a **highly interactive, AI-driven e-commerce system** with **personalized recommendations**, **real-time communication**, and **advanced admin tools**.  
