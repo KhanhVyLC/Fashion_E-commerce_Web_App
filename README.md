@@ -1,6 +1,6 @@
-## 🛍️ E-commerce Fashion Web Application – **Fullstack Developer (MERN Stack)**
+## 🛍️ E-commerce Fashion Web Application – **MERN Stack**
 
-- Developed a **full-stack e-commerce platform** using the **MERN stack** (**MongoDB, Express.js, React, Node.js**) with **TypeScript** for enhanced type safety.  
+- Developed a **e-commerce platform** using the **MERN stack** (**MongoDB, Express.js, React, Node.js**) with **TypeScript** for enhanced type safety.  
 
 ### 👤 Client Features
 - **User Authentication** with **JWT** and session management.  
