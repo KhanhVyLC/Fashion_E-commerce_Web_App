@@ -1,10 +1,23 @@
-// src/pages/OrderHistory.tsx - Updated với nút Hủy đơn hàng
+// src/pages/OrderHistory.tsx - Updated với thông tin thanh toán chi tiết
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from '../utils/axios';
 import ReviewForm from '../components/ReviewForm';
 import { useAuth } from '../context/AuthContext';
-import { ShoppingBagIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { 
+  ShoppingBagIcon, 
+  XMarkIcon,
+  QrCodeIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  CheckCircleIcon,
+  InformationCircleIcon,
+  BanknotesIcon,
+  TicketIcon,
+  SparklesIcon,
+  ReceiptPercentIcon
+} from '@heroicons/react/24/outline';
+import { ArrowPathIcon } from '@heroicons/react/24/solid';
 
 const OrderHistory: React.FC = () => {
   const [orders, setOrders] = useState<any[]>([]);
@@ -12,6 +25,9 @@ const OrderHistory: React.FC = () => {
   const [selectedReview, setSelectedReview] = useState<{productId: string, orderId: string} | null>(null);
   const [cancelingOrder, setCancelingOrder] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState<{orderId: string, orderNumber: string} | null>(null);
+  const [showQRModal, setShowQRModal] = useState<any>(null);
+  const [loadingQR, setLoadingQR] = useState(false);
+  const [expandedPayment, setExpandedPayment] = useState<string | null>(null);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -20,16 +36,44 @@ const OrderHistory: React.FC = () => {
     }
   }, [user]);
 
+  // Auto-refresh orders every 5 minutes to check payment status
+  useEffect(() => {
+    if (user) {
+      const interval = setInterval(() => {
+        fetchOrders();
+      }, 5 * 60 * 1000); // 5 minutes
+      
+      return () => clearInterval(interval);
+    }
+  }, [user]);
+
   const fetchOrders = async () => {
     try {
       const { data } = await axios.get('/orders/my-orders');
-      console.log('Orders fetched:', data); // Debug
+      console.log('Orders fetched:', data);
       setOrders(data);
     } catch (error) {
       console.error('Error fetching orders:', error);
       setOrders([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleViewQR = async (orderId: string) => {
+    setLoadingQR(true);
+    try {
+      const { data } = await axios.get(`/orders/${orderId}/qr-code`);
+      setShowQRModal(data);
+    } catch (error: any) {
+      console.error('Error fetching QR code:', error);
+      if (error.response?.data?.expired) {
+        alert('Đơn hàng đã hết hạn thanh toán');
+      } else {
+        alert(error.response?.data?.message || 'Không thể tải mã QR');
+      }
+    } finally {
+      setLoadingQR(false);
     }
   };
 
@@ -68,6 +112,7 @@ const OrderHistory: React.FC = () => {
       case 'shipped': return 'text-purple-600 bg-purple-50';
       case 'delivered': return 'text-green-600 bg-green-50';
       case 'cancelled': return 'text-red-600 bg-red-50';
+      case 'expired': return 'text-gray-600 bg-gray-50';
       default: return 'text-gray-600 bg-gray-50';
     }
   };
@@ -79,8 +124,39 @@ const OrderHistory: React.FC = () => {
       case 'shipped': return 'Đang giao hàng';
       case 'delivered': return 'Đã giao hàng';
       case 'cancelled': return 'Đã hủy';
+      case 'expired': return 'Hết hạn thanh toán';
       default: return status;
     }
+  };
+
+  const formatTimeRemaining = (deadline: any) => {
+    if (!deadline) return null;
+    
+    if (deadline.isExpired) {
+      return <span className="text-red-600">Đã hết hạn thanh toán</span>;
+    }
+    
+    const { hoursRemaining, minutesRemaining } = deadline;
+    
+    if (hoursRemaining <= 6) {
+      return (
+        <span className="text-orange-600 font-medium flex items-center">
+          <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
+          Còn {hoursRemaining}h {minutesRemaining}m để thanh toán
+        </span>
+      );
+    }
+    
+    return (
+      <span className="text-blue-600 flex items-center">
+        <ClockIcon className="w-4 h-4 mr-1" />
+        Còn {hoursRemaining}h {minutesRemaining}m để thanh toán
+      </span>
+    );
+  };
+
+  const togglePaymentDetails = (orderId: string) => {
+    setExpandedPayment(expandedPayment === orderId ? null : orderId);
   };
 
   if (loading) {
@@ -124,7 +200,7 @@ const OrderHistory: React.FC = () => {
           <div key={order._id} className="bg-white rounded-lg shadow-md overflow-hidden">
             {/* Order Header */}
             <div className="bg-gray-50 px-6 py-4 border-b">
-              <div className="flex flex-wrap justify-between items-center gap-4">
+              <div className="flex flex-wrap justify-between items-start gap-4">
                 <div>
                   <p className="text-sm text-gray-600">
                     Mã đơn hàng: <span className="font-semibold text-gray-800">#{order._id.slice(-8)}</span>
@@ -138,11 +214,37 @@ const OrderHistory: React.FC = () => {
                       minute: '2-digit'
                     })}
                   </p>
+                  {/* Payment deadline for bank transfer */}
+                  {order.paymentMethod === 'BankTransfer' && 
+                   order.paymentStatus === 'pending' && 
+                   order.paymentDeadlineStatus && 
+                   !order.paymentDeadlineStatus.isExpired && (
+                    <div className="mt-2">
+                      {formatTimeRemaining(order.paymentDeadlineStatus)}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.orderStatus)}`}>
                     {getStatusText(order.orderStatus)}
                   </span>
+                  
+                  {/* Show QR button for pending bank transfer */}
+                  {order.paymentMethod === 'BankTransfer' && 
+                   order.paymentStatus === 'pending' && 
+                   order.orderStatus !== 'cancelled' &&
+                   order.orderStatus !== 'expired' && (
+                    <button
+                      onClick={() => handleViewQR(order._id)}
+                      disabled={loadingQR}
+                      className="px-3 py-1 text-sm rounded-md bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors flex items-center"
+                    >
+                      <QrCodeIcon className="w-4 h-4 mr-1" />
+                      Xem QR
+                    </button>
+                  )}
+                  
+                  {/* Cancel button */}
                   {canCancelOrder(order.orderStatus) && (
                     <button
                       onClick={() => setShowCancelModal({
@@ -178,9 +280,26 @@ const OrderHistory: React.FC = () => {
                       <p className="text-sm text-gray-600">
                         Size: {item.size} | Màu: {item.color} | SL: {item.quantity}
                       </p>
-                      <p className="text-sm font-semibold text-gray-800 mt-1">
-                        {(item.price * item.quantity).toLocaleString('vi-VN')}₫
-                      </p>
+                      <div className="mt-1">
+                        {item.isFlashSaleItem ? (
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-red-600">
+                              {(item.price * item.quantity).toLocaleString('vi-VN')}₫
+                            </p>
+                            <p className="text-xs text-gray-400 line-through">
+                              {(item.originalPrice * item.quantity).toLocaleString('vi-VN')}₫
+                            </p>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                              <SparklesIcon className="w-3 h-3 mr-1" />
+                              Flash Sale
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-sm font-semibold text-gray-800">
+                            {(item.price * item.quantity).toLocaleString('vi-VN')}₫
+                          </p>
+                        )}
+                      </div>
                     </div>
                     {order.orderStatus === 'delivered' && item.product && (
                       <button
@@ -194,28 +313,137 @@ const OrderHistory: React.FC = () => {
                 ))}
               </div>
 
-              {/* Order Summary */}
+              {/* Payment Details Section */}
               <div className="mt-6 pt-4 border-t">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-sm text-gray-600">Phương thức thanh toán:</p>
-                    <p className="font-medium">
-                      {order.paymentMethod === 'COD' ? 'Thanh toán khi nhận hàng' : 'Chuyển khoản'}
-                    </p>
+                <button
+                  onClick={() => togglePaymentDetails(order._id)}
+                  className="w-full flex items-center justify-between py-2 text-left hover:bg-gray-50 rounded-lg transition-colors"
+                >
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    <ReceiptPercentIcon className="w-5 h-5 mr-2" />
+                    Chi tiết thanh toán
+                  </span>
+                  <svg
+                    className={`w-5 h-5 text-gray-400 transform transition-transform ${
+                      expandedPayment === order._id ? 'rotate-180' : ''
+                    }`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {expandedPayment === order._id && (
+                  <div className="mt-4 bg-gray-50 rounded-lg p-4 space-y-3">
+                    {/* Subtotal */}
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Tạm tính:</span>
+                      <span className="font-medium">{order.subtotal.toLocaleString('vi-VN')}₫</span>
+                    </div>
+
+                    {/* Flash Sale Discount */}
+                    {order.flashSaleDiscount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600 flex items-center">
+                          <SparklesIcon className="w-4 h-4 mr-1 text-red-500" />
+                          Giảm giá Flash Sale:
+                        </span>
+                        <span className="font-medium text-red-600">
+                          -{order.flashSaleDiscount.toLocaleString('vi-VN')}₫
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Voucher Discount */}
+                    {order.voucherDiscount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600 flex items-center">
+                          <TicketIcon className="w-4 h-4 mr-1 text-blue-500" />
+                          Giảm giá Voucher{order.voucherCode && ` (${order.voucherCode})`}:
+                        </span>
+                        <span className="font-medium text-blue-600">
+                          -{order.voucherDiscount.toLocaleString('vi-VN')}₫
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Total Discount */}
+                    {order.discountAmount > 0 && (
+                      <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
+                        <span className="text-gray-600 font-medium">Tổng giảm giá:</span>
+                        <span className="font-semibold text-green-600">
+                          -{order.discountAmount.toLocaleString('vi-VN')}₫
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Shipping Fee */}
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Phí vận chuyển:</span>
+                      <span className="font-medium">
+                        {order.shippingFee > 0 
+                          ? `${order.shippingFee.toLocaleString('vi-VN')}₫`
+                          : 'Miễn phí'
+                        }
+                      </span>
+                    </div>
+
+                    {/* Payment Method */}
+                    <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
+                      <span className="text-gray-600">Phương thức thanh toán:</span>
+                      <span className="font-medium flex items-center">
+                        {order.paymentMethod === 'COD' ? (
+                          <>
+                            <BanknotesIcon className="w-4 h-4 mr-1" />
+                            Thanh toán khi nhận hàng
+                          </>
+                        ) : (
+                          <>
+                            <QrCodeIcon className="w-4 h-4 mr-1" />
+                            Chuyển khoản
+                            {order.paymentStatus === 'paid' && (
+                              <CheckCircleIcon className="w-4 h-4 ml-2 text-green-600" />
+                            )}
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Total Amount */}
+                    <div className="flex justify-between text-base pt-2 border-t border-gray-200">
+                      <span className="font-semibold text-gray-700">Thành tiền:</span>
+                      <span className="text-xl font-bold text-red-600">
+                        {order.totalAmount.toLocaleString('vi-VN')}₫
+                      </span>
+                    </div>
+
+                    {/* Savings Badge */}
+                    {order.discountAmount > 0 && (
+                      <div className="mt-3 bg-green-50 border border-green-200 rounded-lg p-3">
+                        <p className="text-sm text-green-800 font-medium text-center">
+                          🎉 Bạn đã tiết kiệm được {order.discountAmount.toLocaleString('vi-VN')}₫
+                          {order.flashSaleDiscount > 0 && order.voucherDiscount > 0 && (
+                            <span className="text-xs block mt-1 text-green-600">
+                              (Flash Sale: {order.flashSaleDiscount.toLocaleString('vi-VN')}₫ + 
+                              Voucher: {order.voucherDiscount.toLocaleString('vi-VN')}₫)
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-600">Tổng cộng:</p>
-                    <p className="text-xl font-bold text-red-600">
-                      {order.totalAmount.toLocaleString('vi-VN')}₫
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
 
               {/* Shipping Address */}
               {order.shippingAddress && (
                 <div className="mt-4 pt-4 border-t">
                   <p className="text-sm text-gray-600 mb-1">Địa chỉ giao hàng:</p>
+                  <p className="text-sm">
+                    {order.shippingAddress.recipientName} - {order.shippingAddress.recipientPhone}
+                  </p>
                   <p className="text-sm">
                     {order.shippingAddress.street}, {order.shippingAddress.state}, {order.shippingAddress.city}
                   </p>
@@ -225,6 +453,111 @@ const OrderHistory: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {/* QR Code Modal */}
+      {showQRModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl w-full max-w-2xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-semibold">Thông tin thanh toán</h3>
+              <button
+                onClick={() => setShowQRModal(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left Column: QR Code */}
+              <div className="space-y-4">
+                {/* Payment deadline warning */}
+                {showQRModal.hoursRemaining !== undefined && showQRModal.hoursRemaining <= 6 && (
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                    <div className="flex items-start">
+                      <ExclamationTriangleIcon className="w-5 h-5 text-orange-600 mr-2 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-orange-800">
+                          Sắp hết hạn thanh toán!
+                        </p>
+                        <p className="text-sm text-orange-600">
+                          Còn {showQRModal.hoursRemaining}h {showQRModal.minutesRemaining}m để thanh toán
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* QR Code */}
+                <div className="flex justify-center">
+                  <div className="bg-white p-4 rounded-lg shadow-md">
+                    <img 
+                      src={showQRModal.qrUrl}
+                      alt="QR Code"
+                      className="w-60 h-60"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Bank Info */}
+              <div className="space-y-4">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Ngân hàng</p>
+                  <p className="font-semibold text-lg">MB Bank</p>
+                </div>
+                
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Số tài khoản</p>
+                  <p className="font-semibold font-mono text-lg">{showQRModal.accountNo}</p>
+                </div>
+                
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Chủ tài khoản</p>
+                  <p className="font-semibold text-lg">{showQRModal.accountName}</p>
+                </div>
+                
+                <div className="bg-blue-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Số tiền</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {showQRModal.amount.toLocaleString('vi-VN')}₫
+                  </p>
+                </div>
+                
+                <div className="bg-yellow-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Nội dung chuyển khoản</p>
+                  <p className="font-bold font-mono text-lg break-all">{showQRModal.content}</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Instructions */}
+            <div className="mt-6 bg-blue-50 rounded-lg p-4">
+              <div className="flex items-start">
+                <InformationCircleIcon className="w-5 h-5 text-blue-600 mr-2 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-blue-900 mb-2">Hướng dẫn thanh toán</p>
+                  <ul className="text-sm text-blue-700 space-y-1">
+                    <li>• Quét mã QR bằng app ngân hàng hoặc chuyển khoản thủ công</li>
+                    <li>• Nhập đúng nội dung chuyển khoản để hệ thống tự động xác nhận</li>
+                    <li>• Đơn hàng sẽ được xử lý sau 5-10 phút kể từ khi thanh toán thành công</li>
+                    <li>• Liên hệ hỗ trợ nếu sau 15 phút đơn hàng chưa được cập nhật</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setShowQRModal(null)}
+                className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cancel Order Modal */}
       {showCancelModal && (
