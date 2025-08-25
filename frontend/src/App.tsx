@@ -35,6 +35,8 @@ import AdminOrders from './pages/admin/AdminOrders';
 import AdminCustomers from './pages/admin/AdminCustomers';
 import AdminReviews from './pages/admin/AdminReviews';
 import AdminRecommendations from './pages/admin/AdminRecommendations';
+import AdminVouchers from './pages/admin/AdminVouchers';
+import AdminFlashSales from './pages/admin/AdminFlashSales';
 
 const queryClient = new QueryClient();
 
@@ -179,7 +181,9 @@ function App() {
                   <Route path="customers" element={<AdminCustomers />} />
                   <Route path="reviews" element={<AdminReviews />} />
                   <Route path="chat" element={<Chat />} />
+                  <Route path="vouchers" element={<AdminVouchers />} /> 
                   <Route path="recommendations" element={<AdminRecommendations />} />
+                  <Route path="flash-sales" element={<AdminFlashSales />} />
                 </Route>
               </Route>
 
