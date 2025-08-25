@@ -1,16 +1,19 @@
-// backend/routes/products.js
+// backend/routes/products.js - COMPLETE VERSION with ALL features + Flash Sale
 const express = require('express');
 const router = express.Router();
 const Product = require('../models/Product');
-const { protect } = require('../middleware/auth');
+const FlashSale = require('../models/FlashSale');
 const User = require('../models/User');
+const { protect } = require('../middleware/auth');
 
-// Get all products with advanced filtering
+// ==================== PUBLIC ROUTES ====================
+
+// Get all products with advanced filtering and flash sale info
 router.get('/', async (req, res) => {
   try {
     const { 
-      search, 
-      category, 
+      search,
+      category,
       brand,
       minPrice, 
       maxPrice,
@@ -85,8 +88,25 @@ router.get('/', async (req, res) => {
       .skip((page - 1) * limit)
       .lean();
 
+    // Get flash sale info for all products
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+
+    // Create a map for faster lookup
+    const flashSaleMap = new Map(
+      productsWithFlashSale.map(p => [p._id.toString(), p])
+    );
+
+    // Merge flash sale info with products maintaining original order
+    const finalProducts = products.map(product => {
+      const withFlashSale = flashSaleMap.get(product._id.toString());
+      return withFlashSale || product;
+    });
+
     res.json({
-      products,
+      products: finalProducts,
       pagination: {
         page: Number(page),
         pages: Math.ceil(total / limit),
@@ -179,7 +199,212 @@ router.get('/colors', async (req, res) => {
   }
 });
 
-// Get product by ID
+// Search suggestions endpoint
+router.get('/search/suggestions', async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || q.length < 2) {
+      return res.json([]);
+    }
+
+    const products = await Product.find({
+      $or: [
+        { name: { $regex: q, $options: 'i' } },
+        { brand: { $regex: q, $options: 'i' } },
+        { category: { $regex: q, $options: 'i' } }
+      ]
+    })
+    .select('name price images category brand')
+    .limit(5)
+    .lean();
+
+    // Get flash sale info for suggestions
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error fetching suggestions:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Search products with flash sale info
+router.get('/search/query', async (req, res) => {
+  try {
+    const { q, limit = 20 } = req.query;
+    
+    if (!q) {
+      return res.json([]);
+    }
+
+    // Search products
+    const products = await Product.find({
+      $or: [
+        { name: { $regex: q, $options: 'i' } },
+        { description: { $regex: q, $options: 'i' } },
+        { tags: { $in: [new RegExp(q, 'i')] } },
+        { brand: { $regex: q, $options: 'i' } },
+        { category: { $regex: q, $options: 'i' } }
+      ]
+    })
+    .limit(Number(limit))
+    .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error searching products:', error);
+    res.status(500).json({ message: 'Error searching products' });
+  }
+});
+
+// Get popular products with flash sale
+router.get('/filter/popular', async (req, res) => {
+  try {
+    const products = await Product.find()
+      .sort({ totalOrders: -1, viewCount: -1 })
+      .limit(8)
+      .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+    
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error fetching popular products:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get trending products with flash sale priority
+router.get('/filter/trending', async (req, res) => {
+  try {
+    const products = await Product.find()
+      .sort({ viewCount: -1, createdAt: -1 })
+      .limit(16) // Get more to filter
+      .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+
+    // Sort to prioritize flash sale items
+    productsWithFlashSale.sort((a, b) => {
+      // Flash sale products first
+      if (a.isFlashSale && !b.isFlashSale) return -1;
+      if (!a.isFlashSale && b.isFlashSale) return 1;
+      
+      // Then by trending score
+      const scoreA = (a.viewCount || 0) + (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+      const scoreB = (b.viewCount || 0) + (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+      return scoreB - scoreA;
+    });
+    
+    res.json(productsWithFlashSale.slice(0, 8));
+  } catch (error) {
+    console.error('Error fetching trending products:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get trending products (alternative endpoint for compatibility)
+router.get('/trending/now', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    
+    // Get products that are trending
+    const trendingProducts = await Product.find({})
+      .sort({ viewCount: -1, totalOrders: -1 })
+      .limit(limit * 2) // Get more to filter
+      .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: trendingProducts.map(p => p._id) } },
+      {}
+    );
+
+    // Sort to prioritize flash sale items
+    productsWithFlashSale.sort((a, b) => {
+      // Flash sale products first
+      if (a.isFlashSale && !b.isFlashSale) return -1;
+      if (!a.isFlashSale && b.isFlashSale) return 1;
+      
+      // Then by trending score
+      const scoreA = (a.viewCount || 0) + (a.totalOrders || 0) * 10;
+      const scoreB = (b.viewCount || 0) + (b.totalOrders || 0) * 10;
+      return scoreB - scoreA;
+    });
+
+    res.json(productsWithFlashSale.slice(0, limit));
+  } catch (error) {
+    console.error('Error fetching trending products:', error);
+    res.status(500).json({ message: 'Error fetching trending products' });
+  }
+});
+
+// Get new arrivals with flash sale
+router.get('/filter/new-arrivals', async (req, res) => {
+  try {
+    const products = await Product.find()
+      .sort({ createdAt: -1 })
+      .limit(8)
+      .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+    
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error fetching new arrivals:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get products by category with flash sale
+router.get('/category/:category', async (req, res) => {
+  try {
+    const { category } = req.params;
+    const { limit = 20, page = 1 } = req.query;
+    
+    const skip = (Number(page) - 1) * Number(limit);
+    
+    const products = await Product.find({ category })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: products.map(p => p._id) } },
+      {}
+    );
+
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error fetching category products:', error);
+    res.status(500).json({ message: 'Error fetching products' });
+  }
+});
+
+// Get single product with flash sale info
 router.get('/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -188,42 +413,113 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // Track view if user is logged in
-    if (req.user) {
-      // Update product view count
-      await Product.findByIdAndUpdate(req.params.id, {
-        $inc: { viewCount: 1 }
-      });
+    // Track view if user is logged in (get user from auth header if available)
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key123456');
+        
+        if (decoded && decoded.id) {
+          // Update product view count
+          await Product.findByIdAndUpdate(req.params.id, {
+            $inc: { viewCount: 1 }
+          });
 
-      // Track in user's view history
-      const user = await User.findById(req.user._id);
-      
-      // Remove existing view of this product
-      user.viewHistory = user.viewHistory.filter(
-        item => item.product.toString() !== req.params.id
-      );
-      
-      // Add new view at the beginning
-      user.viewHistory.unshift({
-        product: req.params.id,
-        viewedAt: new Date(),
-        source: req.query.source || 'direct'
-      });
-      
-      // Keep only last 50 views
-      if (user.viewHistory.length > 50) {
-        user.viewHistory = user.viewHistory.slice(0, 50);
+          // Track in user's view history
+          const user = await User.findById(decoded.id);
+          
+          if (user) {
+            // Remove existing view of this product
+            user.viewHistory = user.viewHistory.filter(
+              item => item.product.toString() !== req.params.id
+            );
+            
+            // Add new view at the beginning
+            user.viewHistory.unshift({
+              product: req.params.id,
+              viewedAt: new Date(),
+              source: req.query.source || 'direct'
+            });
+            
+            // Keep only last 50 views
+            if (user.viewHistory.length > 50) {
+              user.viewHistory = user.viewHistory.slice(0, 50);
+            }
+            
+            await user.save();
+          }
+        }
+      } catch (error) {
+        // Silent fail - view tracking is not critical
+        console.log('View tracking failed:', error.message);
       }
-      
-      await user.save();
     }
 
-    res.json(product);
+    // Get product with flash sale info
+    const productWithFlashSale = await product.getWithFlashSale();
+
+    res.json(productWithFlashSale);
   } catch (error) {
     console.error('Error fetching product:', error);
     res.status(500).json({ message: error.message });
   }
 });
+
+// Get related products with flash sale info
+router.get('/:id/related', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    // Find related products
+    const relatedProducts = await Product.find({
+      _id: { $ne: product._id },
+      $or: [
+        { category: product.category },
+        { brand: product.brand },
+        { tags: { $in: product.tags } }
+      ]
+    })
+    .limit(8)
+    .lean();
+
+    // Get flash sale info
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: relatedProducts.map(p => p._id) } },
+      {}
+    );
+
+    res.json(productsWithFlashSale);
+  } catch (error) {
+    console.error('Error fetching related products:', error);
+    res.status(500).json({ message: 'Error fetching related products' });
+  }
+});
+
+// Get product price (considering flash sale)
+router.get('/:id/price', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    const priceInfo = await product.getEffectivePrice();
+    
+    res.json(priceInfo);
+  } catch (error) {
+    console.error('Error fetching product price:', error);
+    res.status(500).json({ message: 'Error fetching price' });
+  }
+});
+
+// ==================== PROTECTED ROUTES (ADMIN) ====================
 
 // Create new product (admin only)
 router.post('/', protect, async (req, res) => {
@@ -275,6 +571,18 @@ router.delete('/:id', protect, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
+    // Check if product is in any active flash sale
+    const flashSales = await FlashSale.find({
+      'products.product': req.params.id,
+      isActive: true
+    });
+    
+    if (flashSales.length > 0) {
+      return res.status(400).json({ 
+        message: 'Cannot delete product that is in active flash sale' 
+      });
+    }
+
     const product = await Product.findByIdAndDelete(req.params.id);
 
     if (!product) {
@@ -288,76 +596,27 @@ router.delete('/:id', protect, async (req, res) => {
   }
 });
 
-// Search suggestions endpoint
-router.get('/search/suggestions', async (req, res) => {
+
+
+// backend/routes/products.js - Thêm endpoint này
+router.post('/batch-with-flash-sale', async (req, res) => {
   try {
-    const { q } = req.query;
+    const { productIds } = req.body;
     
-    if (!q || q.length < 2) {
-      return res.json([]);
+    if (!productIds || !Array.isArray(productIds)) {
+      return res.status(400).json({ message: 'Invalid product IDs' });
     }
-
-    const products = await Product.find({
-      $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { brand: { $regex: q, $options: 'i' } },
-        { category: { $regex: q, $options: 'i' } }
-      ]
-    })
-    .select('name price images category brand')
-    .limit(5)
-    .lean();
-
-    res.json(products);
-  } catch (error) {
-    console.error('Error fetching suggestions:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get popular products
-router.get('/filter/popular', async (req, res) => {
-  try {
-    const products = await Product.find()
-      .sort({ totalOrders: -1, viewCount: -1 })
-      .limit(8)
-      .lean();
+    
+    // Get products with flash sale info
+    const products = await Product.getProductsWithFlashSale(
+      { _id: { $in: productIds } },
+      {}
+    );
     
     res.json(products);
   } catch (error) {
-    console.error('Error fetching popular products:', error);
-    res.status(500).json({ message: error.message });
+    console.error('Error fetching products with flash sale:', error);
+    res.status(500).json({ message: 'Error fetching products' });
   }
 });
-
-// Get trending products (high view count recently)
-router.get('/filter/trending', async (req, res) => {
-  try {
-    const products = await Product.find()
-      .sort({ viewCount: -1, createdAt: -1 })
-      .limit(8)
-      .lean();
-    
-    res.json(products);
-  } catch (error) {
-    console.error('Error fetching trending products:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get new arrivals
-router.get('/filter/new-arrivals', async (req, res) => {
-  try {
-    const products = await Product.find()
-      .sort({ createdAt: -1 })
-      .limit(8)
-      .lean();
-    
-    res.json(products);
-  } catch (error) {
-    console.error('Error fetching new arrivals:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
 module.exports = router;
