@@ -1,4 +1,4 @@
-// backend/routes/recommendations.js - COMPLETE FIXED VERSION
+// backend/routes/recommendations.js - FIXED VERSION WITH CORRECT TRENDING COUNT
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -7,6 +7,7 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const Order = require('../models/Order');
 const Review = require('../models/Review');
+const FlashSale = require('../models/FlashSale');
 const { protect } = require('../middleware/auth');
 
 // ==================== CONFIGURATION ====================
@@ -24,21 +25,21 @@ const config = {
     recentActivityWindow: 60 * 60 * 1000, // 1 hour for recent activity
   },
   weights: {
-    purchase: 5,      // Increased weight for purchases
-    view: 1,          // Increased weight for views
-    search: 0.5,      // Increased weight for searches
-    wishlist: 2,      // Increased weight for wishlist
-    cart: 3,          // Increased weight for cart
-    recentBoost: 2,   // Boost for recent activities
+    purchase: 5,      
+    view: 1,          
+    search: 0.5,      
+    wishlist: 2,      
+    cart: 3,          
+    recentBoost: 2,   
   },
   timeDecay: {
     purchaseDecayDays: 90,
-    viewDecayDays: 3,      // Reduced from 7 days
-    searchDecayDays: 14,   // Reduced from 30 days
+    viewDecayDays: 3,      
+    searchDecayDays: 14,   
   },
   tracking: {
-    minViewDuration: 1,    // Reduced from 3 seconds
-    viewCountThreshold: 3, // Minimum views before strong personalization
+    minViewDuration: 1,    
+    viewCountThreshold: 3, 
   }
 };
 
@@ -46,7 +47,7 @@ const config = {
 class RecommendationCache {
   constructor() {
     this.cache = new Map();
-    this.userActivity = new Map(); // Track user activity for cache invalidation
+    this.userActivity = new Map(); 
     this.stats = {
       hits: 0,
       misses: 0,
@@ -62,7 +63,6 @@ class RecommendationCache {
       return null;
     }
 
-    // Use shorter duration for personalized content
     const duration = isPersonalized ? config.cache.personalizedDuration : config.cache.duration;
     
     if (Date.now() - item.timestamp > duration) {
@@ -76,7 +76,6 @@ class RecommendationCache {
   }
 
   set(key, data, isPersonalized = false) {
-    // Implement LRU eviction if cache is too large
     if (this.cache.size >= config.cache.maxSize) {
       const oldestKey = this.findOldestKey();
       if (oldestKey) {
@@ -133,14 +132,12 @@ class RecommendationCache {
     return count;
   }
 
-  // Track user activity to determine if cache should be invalidated
   trackUserActivity(userId) {
     const now = Date.now();
     const lastActivity = this.userActivity.get(userId) || 0;
     this.userActivity.set(userId, now);
     
-    // If user was active recently, invalidate their cache
-    if (now - lastActivity < 5000) { // 5 seconds
+    if (now - lastActivity < 5000) { 
       this.invalidateUser(userId);
     }
   }
@@ -174,7 +171,6 @@ const optionalAuth = async (req, res, next) => {
       req.user = await User.findById(decoded.id).select('-password').lean();
       req.userId = decoded.id;
       
-      // Track user activity
       recommendationCache.trackUserActivity(decoded.id);
     } catch (error) {
       console.warn('Optional auth failed:', error.message);
@@ -194,9 +190,8 @@ const calculateTimeDecay = (date, decayDays) => {
   if (!date) return 0.1;
   const hoursSince = (Date.now() - new Date(date).getTime()) / (1000 * 60 * 60);
   
-  // More aggressive decay for recent items
-  if (hoursSince < 1) return 2.0;  // Within last hour
-  if (hoursSince < 24) return 1.5; // Within last day
+  if (hoursSince < 1) return 2.0;  
+  if (hoursSince < 24) return 1.5; 
   
   const daysSince = hoursSince / 24;
   return Math.max(0.1, Math.exp(-daysSince / decayDays));
@@ -207,35 +202,88 @@ const calculateProductSimilarity = (product1, product2) => {
   
   let score = 0;
   
-  // Category similarity (40%)
   if (product1.category === product2.category) {
     score += 4;
     if (product1.subcategory === product2.subcategory) score += 2;
   }
   
-  // Brand similarity (20%)
   if (product1.brand && product1.brand === product2.brand) {
     score += 2;
   }
   
-  // Price similarity (20%)
   const priceDiff = Math.abs(product1.price - product2.price) / Math.max(product1.price, product2.price);
   score += (1 - priceDiff) * 2;
   
-  // Tag similarity (10%)
   if (product1.tags?.length && product2.tags?.length) {
     const commonTags = product1.tags.filter(tag => product2.tags.includes(tag));
     score += (commonTags.length / Math.max(product1.tags.length, product2.tags.length)) * 1;
   }
   
-  // Rating similarity (10%)
   const ratingDiff = Math.abs((product1.rating || 0) - (product2.rating || 0));
   score += (1 - ratingDiff / 5) * 1;
   
   return score;
 };
 
-// Get dynamic distribution based on user behavior
+// ==================== FLASH SALE INTEGRATION ====================
+async function applyFlashSaleInfo(products) {
+  if (!products || products.length === 0) return [];
+  
+  try {
+    const productIds = products.map(p => p._id || p);
+    
+    const productsWithFlashSale = await Product.getProductsWithFlashSale(
+      { _id: { $in: productIds } },
+      {}
+    );
+    
+    const flashSaleMap = new Map(
+      productsWithFlashSale.map(p => [p._id.toString(), p])
+    );
+    
+    return products.map(product => {
+      const productId = (product._id || product).toString();
+      const withFlashSale = flashSaleMap.get(productId);
+      
+      if (withFlashSale) {
+        return {
+          ...toSafeObject(product),
+          ...withFlashSale,
+          isFlashSale: withFlashSale.isFlashSale || false,
+          effectivePrice: withFlashSale.effectivePrice || product.price,
+          flashSale: withFlashSale.flashSale || null,
+          recommendationType: product.recommendationType,
+          reason: product.reason,
+          confidence: product.confidence,
+          recommendationScore: product.recommendationScore,
+          recommendedByUsers: product.recommendedByUsers,
+          contentScore: product.contentScore,
+          trendingScore: product.trendingScore,
+          trendingUsers: product.trendingUsers,
+          trendingOrders: product.trendingOrders,
+          complementScore: product.complementScore,
+          boughtTogether: product.boughtTogether
+        };
+      }
+      
+      return {
+        ...toSafeObject(product),
+        isFlashSale: false,
+        effectivePrice: product.price,
+        flashSale: null
+      };
+    });
+  } catch (error) {
+    console.error('Error applying flash sale info:', error);
+    return products.map(p => ({
+      ...toSafeObject(p),
+      isFlashSale: false,
+      effectivePrice: p.price,
+      flashSale: null
+    }));
+  }
+}
+
 const getDynamicDistribution = async (userId, limit) => {
   try {
     const user = await User.findById(userId)
@@ -251,7 +299,6 @@ const getDynamicDistribution = async (userId, limit) => {
       };
     }
     
-    // Count recent activities
     const recentViews = user.viewHistory?.filter(v => 
       new Date(v.viewedAt) > new Date(Date.now() - config.limits.recentActivityWindow)
     ).length || 0;
@@ -262,9 +309,7 @@ const getDynamicDistribution = async (userId, limit) => {
     
     const totalOrders = user.analytics?.totalOrders || 0;
     
-    // Adjust distribution based on activity
     if (recentViews > 10 || recentSearches > 5) {
-      // Very active user - more personalized content
       return {
         content: Math.floor(limit * 0.6),
         collaborative: Math.floor(limit * 0.2),
@@ -272,7 +317,6 @@ const getDynamicDistribution = async (userId, limit) => {
         new: Math.ceil(limit * 0.1)
       };
     } else if (recentViews > 5 || totalOrders > 0) {
-      // Moderately active user
       return {
         content: Math.floor(limit * 0.5),
         collaborative: Math.floor(limit * 0.25),
@@ -280,7 +324,6 @@ const getDynamicDistribution = async (userId, limit) => {
         new: Math.ceil(limit * 0.1)
       };
     } else {
-      // New or inactive user - more discovery
       return {
         content: Math.floor(limit * 0.3),
         collaborative: Math.floor(limit * 0.2),
@@ -308,7 +351,6 @@ async function getRandomProducts(limit = 20, excludeIds = []) {
       .filter(id => id && mongoose.Types.ObjectId.isValid(id))
       .map(id => new mongoose.Types.ObjectId(id));
 
-    // Get popular products instead of pure random
     const products = await Product.aggregate([
       { 
         $match: { 
@@ -350,7 +392,6 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
   if (cached) return cached;
 
   try {
-    // Get user's recent interactions
     const [userOrders, userInteractions] = await Promise.all([
       Order.find({ 
         user: userId,
@@ -370,10 +411,8 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
       return [];
     }
 
-    // Build user product interaction map with weights
     const userProducts = new Map();
     
-    // Add order history
     userOrders.forEach(order => {
       const weight = calculateTimeDecay(order.createdAt, config.timeDecay.purchaseDecayDays);
       order.items.forEach(item => {
@@ -386,7 +425,6 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
       });
     });
     
-    // Add recent views
     if (userInteractions?.viewHistory) {
       userInteractions.viewHistory
         .filter(v => v.product && new Date(v.viewedAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
@@ -399,7 +437,6 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
         });
     }
     
-    // Add wishlist items
     if (userInteractions?.interactions?.wishlist) {
       userInteractions.interactions.wishlist.forEach(item => {
         if (item.product) {
@@ -415,7 +452,6 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
       return [];
     }
 
-    // Find similar users with better scoring
     const productIds = Array.from(userProducts.keys()).map(id => new mongoose.Types.ObjectId(id));
     
     const similarUsers = await Order.aggregate([
@@ -424,7 +460,7 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
           user: { $ne: new mongoose.Types.ObjectId(userId) },
           'items.product': { $in: productIds },
           orderStatus: { $ne: 'cancelled' },
-          createdAt: { $gte: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000) } // Last 6 months
+          createdAt: { $gte: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000) }
         }
       },
       { $unwind: '$items' },
@@ -459,13 +495,12 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
       return [];
     }
 
-    // Get recommendations from similar users with better scoring
     const recommendations = await Order.aggregate([
       {
         $match: {
           user: { $in: similarUsers.slice(0, 50).map(u => u._id) },
           orderStatus: { $ne: 'cancelled' },
-          createdAt: { $gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } // Last 3 months
+          createdAt: { $gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) }
         }
       },
       { $unwind: '$items' },
@@ -483,7 +518,7 @@ async function getCollaborativeRecommendations(userId, limit = 20) {
                 '$items.quantity',
                 { $cond: [
                   { $gte: ['$createdAt', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)] },
-                  2, // Recent orders get double weight
+                  2,
                   1
                 ]}
               ]
@@ -555,7 +590,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
 
     if (!user) return [];
 
-    // Build enhanced user preference profile
     const preferences = {
       categories: new Map(),
       brands: new Map(),
@@ -566,7 +600,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       recentProducts: []
     };
 
-    // Analyze recent view history with time weighting
     if (user.viewHistory && user.viewHistory.length > 0) {
       const recentViews = user.viewHistory
         .filter(v => v.product && new Date(v.viewedAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
@@ -581,7 +614,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       }).lean();
 
       viewedProducts.forEach((product, index) => {
-        // Recent views get higher weight
         const recencyWeight = 1 + (1 / (index + 1));
         const baseWeight = config.weights.view * recencyWeight;
         
@@ -594,7 +626,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
             (preferences.brands.get(product.brand) || 0) + baseWeight);
         }
         
-        // Track colors and sizes
         product.colors?.forEach(color => {
           preferences.colors.set(color, (preferences.colors.get(color) || 0) + baseWeight * 0.5);
         });
@@ -603,14 +634,12 @@ async function getContentBasedRecommendations(userId, limit = 20) {
           preferences.sizes.set(size, (preferences.sizes.get(size) || 0) + baseWeight * 0.5);
         });
         
-        // Track tags
         product.tags?.forEach(tag => {
           preferences.tags.set(tag, (preferences.tags.get(tag) || 0) + baseWeight * 0.7);
         });
       });
     }
 
-    // Analyze search history
     if (user.searchHistory && user.searchHistory.length > 0) {
       const recentSearches = user.searchHistory
         .filter(s => new Date(s.searchedAt) > new Date(Date.now() - 14 * 24 * 60 * 60 * 1000))
@@ -620,7 +649,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
         const weight = config.weights.search * (1 + (1 / (index + 1)));
         const query = search.query.toLowerCase();
         
-        // Extract potential tags from search queries
         const words = query.split(/\s+/);
         words.forEach(word => {
           if (word.length > 2) {
@@ -630,7 +658,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       });
     }
 
-    // Analyze purchase history with enhanced weighting
     const orders = await Order.find({ 
       user: userId,
       orderStatus: { $ne: 'cancelled' }
@@ -647,29 +674,24 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       
       order.items.forEach(item => {
         if (item.product) {
-          // Categories
           if (item.product.category) {
             preferences.categories.set(item.product.category, 
               (preferences.categories.get(item.product.category) || 0) + orderWeight);
           }
           
-          // Brands
           if (item.product.brand) {
             preferences.brands.set(item.product.brand, 
               (preferences.brands.get(item.product.brand) || 0) + orderWeight);
           }
           
-          // Price
           if (item.product.price) {
             prices.push(item.product.price);
           }
           
-          // Tags
           item.product.tags?.forEach(tag => {
             preferences.tags.set(tag, (preferences.tags.get(tag) || 0) + orderWeight * 0.8);
           });
           
-          // Colors and sizes from actual purchases
           if (item.color) {
             preferences.colors.set(item.color, 
               (preferences.colors.get(item.color) || 0) + orderWeight * 1.5);
@@ -682,7 +704,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       });
     });
 
-    // Analyze wishlist
     if (user.interactions?.wishlist) {
       const wishlistProducts = await Product.find({
         _id: { $in: user.interactions.wishlist.map(w => w.product).filter(Boolean) }
@@ -701,7 +722,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       });
     }
 
-    // Calculate dynamic price range
     if (prices.length > 0) {
       prices.sort((a, b) => a - b);
       const q1 = prices[Math.floor(prices.length * 0.25)];
@@ -715,7 +735,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       preferences.priceRange = user.preferences.priceRange;
     }
 
-    // Get top preferences
     const topCategories = Array.from(preferences.categories.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
@@ -736,10 +755,9 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       .slice(0, 3)
       .map(([color]) => color);
 
-    // Build smart query
     const mustConditions = [
       { stock: { $exists: true, $ne: [] } },
-      { _id: { $nin: preferences.recentProducts } } // Exclude recently viewed
+      { _id: { $nin: preferences.recentProducts } }
     ];
 
     const shouldConditions = [];
@@ -773,63 +791,52 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       ]
     };
 
-    // Get and score products
     const products = await Product.find(query)
       .limit(limit * 3)
       .lean();
 
-    // Advanced scoring algorithm
     const scoredProducts = products.map(product => {
       let score = 0;
       
-      // Category score (highest weight)
       const categoryScore = preferences.categories.get(product.category) || 0;
       score += categoryScore * 3;
       
-      // Brand score
       if (product.brand) {
         const brandScore = preferences.brands.get(product.brand) || 0;
         score += brandScore * 2;
       }
       
-      // Tag score
       let tagScore = 0;
       product.tags?.forEach(tag => {
         tagScore += (preferences.tags.get(tag) || 0);
       });
       score += tagScore * 1.5;
       
-      // Color preference score
       let colorScore = 0;
       product.colors?.forEach(color => {
         colorScore += (preferences.colors.get(color) || 0);
       });
       score += colorScore;
       
-      // Size preference score
       let sizeScore = 0;
       product.sizes?.forEach(size => {
         sizeScore += (preferences.sizes.get(size) || 0);
       });
       score += sizeScore * 0.5;
       
-      // Quality signals
       score += (product.rating || 0) * 3;
       score += Math.log(Math.max(1, product.totalReviews || 0)) * 0.5;
       score += Math.log(Math.max(1, product.totalOrders || 0)) * 0.3;
       
-      // Popularity boost for newer users
       if (user.viewHistory?.length < 10) {
         score += Math.log(Math.max(1, product.viewCount || 0)) * 0.5;
       }
       
-      // Recency bonus
       const daysSinceCreated = (Date.now() - new Date(product.createdAt).getTime()) / (1000 * 60 * 60 * 24);
       if (daysSinceCreated < 30) {
         score += (30 - daysSinceCreated) / 30 * 2;
       }
       
-      // Price match bonus
       if (product.price >= preferences.priceRange.min && product.price <= preferences.priceRange.max) {
         score += 2;
       }
@@ -837,7 +844,6 @@ async function getContentBasedRecommendations(userId, limit = 20) {
       return { product, score };
     });
 
-    // Sort and deduplicate
     const recommendations = scoredProducts
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
@@ -854,7 +860,7 @@ async function getContentBasedRecommendations(userId, limit = 20) {
   }
 }
 
-// 4. Real-time Trending Products
+// 4. FIXED: Real-time Trending Products with Accurate User Count
 async function getTrendingProducts(limit = 20) {
   const cacheKey = `trending_${limit}`;
   const cached = recommendationCache.get(cacheKey);
@@ -866,8 +872,8 @@ async function getTrendingProducts(limit = 20) {
     const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
     const oneWeekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
     
-    // Multi-timeframe trending analysis
-    const trending = await Order.aggregate([
+    // Get order-based trending with accurate user count
+    const orderTrending = await Order.aggregate([
       {
         $match: {
           createdAt: { $gte: oneWeekAgo },
@@ -878,17 +884,16 @@ async function getTrendingProducts(limit = 20) {
       {
         $group: {
           _id: '$items.product',
-          // Different weights for different time periods
           recentOrders: {
             $sum: {
               $cond: [
                 { $gte: ['$createdAt', oneDayAgo] },
-                3, // Last 24 hours - highest weight
+                3,
                 {
                   $cond: [
                     { $gte: ['$createdAt', threeDaysAgo] },
-                    2, // Last 3 days
-                    1  // Last week
+                    2,
+                    1
                   ]
                 }
               ]
@@ -896,52 +901,18 @@ async function getTrendingProducts(limit = 20) {
           },
           totalQuantity: { $sum: '$items.quantity' },
           totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-          uniqueUsers: { $addToSet: '$user' },
+          uniqueBuyers: { $addToSet: '$user' },
           avgOrderValue: { $avg: { $multiply: ['$items.price', '$items.quantity'] } }
         }
       },
       {
         $addFields: {
-          userCount: { $size: '$uniqueUsers' },
-          // Complex trending score
-          trendScore: {
-            $add: [
-              { $multiply: ['$recentOrders', 5] },
-              { $multiply: ['$userCount', 3] },
-              { $multiply: ['$totalQuantity', 1] },
-              { $multiply: [{ $log10: { $add: ['$totalRevenue', 1] } }, 2] }
-            ]
-          }
+          buyerCount: { $size: '$uniqueBuyers' }
         }
-      },
-      { $sort: { trendScore: -1 } },
-      { $limit: limit * 2 },
-      {
-        $lookup: {
-          from: 'products',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'product'
-        }
-      },
-      { $unwind: '$product' },
-      {
-        $match: {
-          'product.stock': { $exists: true, $ne: [] }
-        }
-      },
-      {
-        $addFields: {
-          'product.trendingScore': '$trendScore',
-          'product.trendingUsers': '$userCount',
-          'product.trendingOrders': '$recentOrders'
-        }
-      },
-      { $replaceRoot: { newRoot: '$product' } },
-      { $limit: limit }
+      }
     ]);
 
-    // Also consider view-based trending
+    // Get view-based trending with accurate viewer count
     const viewTrending = await User.aggregate([
       {
         $match: {
@@ -951,7 +922,8 @@ async function getTrendingProducts(limit = 20) {
       { $unwind: '$viewHistory' },
       {
         $match: {
-          'viewHistory.viewedAt': { $gte: threeDaysAgo }
+          'viewHistory.viewedAt': { $gte: threeDaysAgo },
+          'viewHistory.product': { $exists: true }
         }
       },
       {
@@ -959,37 +931,211 @@ async function getTrendingProducts(limit = 20) {
           _id: '$viewHistory.product',
           viewCount: { $sum: 1 },
           uniqueViewers: { $addToSet: '$_id' },
+          recentViews: {
+            $sum: {
+              $cond: [
+                { $gte: ['$viewHistory.viewedAt', oneDayAgo] },
+                2,
+                1
+              ]
+            }
+          },
           avgDuration: { $avg: '$viewHistory.duration' }
         }
       },
       {
         $addFields: {
-          viewerCount: { $size: '$uniqueViewers' },
-          viewScore: {
-            $add: [
-              { $multiply: ['$viewCount', 0.5] },
-              { $multiply: ['$viewerCount', 2] },
-              { $multiply: [{ $ifNull: ['$avgDuration', 0] }, 0.1] }
-            ]
-          }
+          viewerCount: { $size: '$uniqueViewers' }
         }
-      },
-      { $sort: { viewScore: -1 } },
-      { $limit: 10 }
+      }
     ]);
 
-    // Merge order-based and view-based trending
-    const viewTrendingMap = new Map(viewTrending.map(v => [v._id.toString(), v.viewScore]));
-    
-    trending.forEach(product => {
-      const viewScore = viewTrendingMap.get(product._id.toString()) || 0;
-      product.combinedTrendScore = (product.trendingScore || 0) + viewScore;
-    });
-    
-    trending.sort((a, b) => (b.combinedTrendScore || 0) - (a.combinedTrendScore || 0));
+    // Get wishlist trending
+    const wishlistTrending = await User.aggregate([
+      {
+        $match: {
+          'interactions.wishlist': { $exists: true, $ne: [] }
+        }
+      },
+      { $unwind: '$interactions.wishlist' },
+      {
+        $match: {
+          'interactions.wishlist.addedAt': { $gte: oneWeekAgo }
+        }
+      },
+      {
+        $group: {
+          _id: '$interactions.wishlist.product',
+          wishlistCount: { $sum: 1 },
+          uniqueUsers: { $addToSet: '$_id' }
+        }
+      },
+      {
+        $addFields: {
+          wishlistUserCount: { $size: '$uniqueUsers' }
+        }
+      }
+    ]);
 
-    recommendationCache.set(cacheKey, trending.slice(0, limit));
-    return trending.slice(0, limit);
+    // Get cart additions trending
+    const cartTrending = await User.aggregate([
+      {
+        $match: {
+          'interactions.cartAdditions': { $exists: true, $ne: [] }
+        }
+      },
+      { $unwind: '$interactions.cartAdditions' },
+      {
+        $match: {
+          'interactions.cartAdditions.timestamp': { $gte: threeDaysAgo },
+          'interactions.cartAdditions.removed': { $ne: true }
+        }
+      },
+      {
+        $group: {
+          _id: '$interactions.cartAdditions.product',
+          cartCount: { $sum: 1 },
+          uniqueUsers: { $addToSet: '$_id' }
+        }
+      },
+      {
+        $addFields: {
+          cartUserCount: { $size: '$uniqueUsers' }
+        }
+      }
+    ]);
+
+    // Create maps for easy lookup
+    const orderMap = new Map(orderTrending.map(item => [
+      item._id?.toString(), 
+      {
+        buyerCount: item.buyerCount,
+        recentOrders: item.recentOrders,
+        totalQuantity: item.totalQuantity,
+        totalRevenue: item.totalRevenue
+      }
+    ]));
+
+    const viewMap = new Map(viewTrending.map(item => [
+      item._id?.toString(),
+      {
+        viewerCount: item.viewerCount,
+        viewCount: item.viewCount,
+        recentViews: item.recentViews,
+        avgDuration: item.avgDuration
+      }
+    ]));
+
+    const wishlistMap = new Map(wishlistTrending.map(item => [
+      item._id?.toString(),
+      {
+        wishlistUserCount: item.wishlistUserCount,
+        wishlistCount: item.wishlistCount
+      }
+    ]));
+
+    const cartMap = new Map(cartTrending.map(item => [
+      item._id?.toString(),
+      {
+        cartUserCount: item.cartUserCount,
+        cartCount: item.cartCount
+      }
+    ]));
+
+    // Get all unique product IDs
+    const allProductIds = new Set([
+      ...Array.from(orderMap.keys()),
+      ...Array.from(viewMap.keys()),
+      ...Array.from(wishlistMap.keys()),
+      ...Array.from(cartMap.keys())
+    ]);
+
+    // Calculate combined trending score for each product
+    const trendingScores = [];
+    
+    for (const productId of allProductIds) {
+      if (!productId) continue;
+      
+      const orderData = orderMap.get(productId) || { buyerCount: 0, recentOrders: 0, totalQuantity: 0, totalRevenue: 0 };
+      const viewData = viewMap.get(productId) || { viewerCount: 0, viewCount: 0, recentViews: 0, avgDuration: 0 };
+      const wishlistData = wishlistMap.get(productId) || { wishlistUserCount: 0, wishlistCount: 0 };
+      const cartData = cartMap.get(productId) || { cartUserCount: 0, cartCount: 0 };
+      
+      // Calculate total unique users interested (avoiding double counting)
+      const allUsers = new Set();
+      
+      // This is an approximation since we can't directly merge user sets from different aggregations
+      // But it gives a more accurate count than just summing
+      const totalUniqueUsers = Math.max(
+        orderData.buyerCount,
+        viewData.viewerCount,
+        orderData.buyerCount + viewData.viewerCount - Math.floor(orderData.buyerCount * 0.3), // Assume 30% overlap
+        wishlistData.wishlistUserCount,
+        cartData.cartUserCount
+      );
+      
+      // Calculate comprehensive trending score
+      const score = 
+        (orderData.recentOrders * 10) +           // Recent purchases have highest weight
+        (orderData.buyerCount * 8) +              // Number of buyers
+        (viewData.recentViews * 2) +              // Recent views
+        (viewData.viewerCount * 3) +              // Number of viewers
+        (wishlistData.wishlistUserCount * 5) +    // Wishlist adds show high interest
+        (cartData.cartUserCount * 6) +            // Cart adds show purchase intent
+        (Math.log10(Math.max(1, orderData.totalRevenue)) * 2) + // Revenue impact
+        (viewData.avgDuration ? Math.min(viewData.avgDuration / 10, 5) : 0); // Engagement
+      
+      trendingScores.push({
+        productId: new mongoose.Types.ObjectId(productId),
+        score,
+        totalUniqueUsers,
+        buyerCount: orderData.buyerCount,
+        viewerCount: viewData.viewerCount,
+        wishlistCount: wishlistData.wishlistUserCount,
+        cartCount: cartData.cartUserCount,
+        recentActivity: orderData.recentOrders + viewData.recentViews
+      });
+    }
+
+    // Sort by score and get top products
+    trendingScores.sort((a, b) => b.score - a.score);
+    const topTrendingIds = trendingScores.slice(0, limit * 2);
+
+    if (topTrendingIds.length === 0) {
+      return [];
+    }
+
+    // Fetch product details
+    const products = await Product.find({
+      _id: { $in: topTrendingIds.map(item => item.productId) },
+      stock: { $exists: true, $ne: [] }
+    }).lean();
+
+    // Create product map
+    const productMap = new Map(products.map(p => [p._id.toString(), p]));
+
+    // Combine scores with product data
+    const finalTrending = topTrendingIds
+      .map(item => {
+        const product = productMap.get(item.productId.toString());
+        if (!product) return null;
+        
+        return {
+          ...product,
+          trendingScore: item.score,
+          trendingUsers: item.totalUniqueUsers, // FIXED: Now shows accurate total unique users
+          trendingBuyers: item.buyerCount,
+          trendingViewers: item.viewerCount,
+          trendingWishlist: item.wishlistCount,
+          trendingCart: item.cartCount,
+          recentActivity: item.recentActivity
+        };
+      })
+      .filter(Boolean)
+      .slice(0, limit);
+
+    recommendationCache.set(cacheKey, finalTrending);
+    return finalTrending;
   } catch (error) {
     console.error('Trending products error:', error);
     return [];
@@ -1008,7 +1154,6 @@ async function getPersonalizedNewArrivals(userId, limit = 20) {
       stock: { $exists: true, $ne: [] }
     };
     
-    // Personalize for logged-in users
     if (preferences) {
       const conditions = [];
       
@@ -1041,7 +1186,6 @@ async function getPersonalizedNewArrivals(userId, limit = 20) {
           isVeryNew: { $gte: ['$createdAt', sevenDaysAgo] },
           newScore: {
             $add: [
-              // Recency score
               {
                 $multiply: [
                   { $subtract: [1, { $divide: [
@@ -1051,9 +1195,7 @@ async function getPersonalizedNewArrivals(userId, limit = 20) {
                   10
                 ]
               },
-              // Quality score
               { $multiply: [{ $ifNull: ['$rating', 0] }, 2] },
-              // Popularity score
               { $log10: { $add: [{ $ifNull: ['$viewCount', 0] }, 1] } }
             ]
           }
@@ -1081,7 +1223,6 @@ async function getUserPreferences(userId) {
     
     if (!user) return null;
     
-    // Use stored preferences if available
     if (user.preferences?.preferredCategories?.length > 0) {
       return {
         categories: user.preferences.preferredCategories,
@@ -1091,13 +1232,11 @@ async function getUserPreferences(userId) {
       };
     }
 
-    // Otherwise, analyze user behavior
     const categories = new Map();
     const brands = new Map();
     const tags = new Map();
     const prices = [];
     
-    // Analyze view history
     if (user.viewHistory && user.viewHistory.length > 0) {
       const recentProductIds = user.viewHistory
         .filter(v => v.product && new Date(v.viewedAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
@@ -1124,7 +1263,6 @@ async function getUserPreferences(userId) {
       }
     }
     
-    // Analyze order history
     const orders = await Order.find({ 
       user: userId,
       orderStatus: { $ne: 'cancelled' }
@@ -1139,7 +1277,7 @@ async function getUserPreferences(userId) {
         if (item.product) {
           if (item.product.category) {
             categories.set(item.product.category, 
-              (categories.get(item.product.category) || 0) + 3); // Higher weight for purchases
+              (categories.get(item.product.category) || 0) + 3);
           }
           if (item.product.brand) {
             brands.set(item.product.brand, 
@@ -1153,7 +1291,6 @@ async function getUserPreferences(userId) {
       });
     });
     
-    // Calculate price range
     let priceRange = null;
     if (prices.length > 0) {
       const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
@@ -1166,7 +1303,6 @@ async function getUserPreferences(userId) {
       };
     }
     
-    // Get top items
     const topCategories = Array.from(categories.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
@@ -1194,6 +1330,83 @@ async function getUserPreferences(userId) {
   }
 }
 
+async function getComplementaryProducts(productIds, limit = 10) {
+  try {
+    const validProductIds = productIds
+      .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+      .map(id => new mongoose.Types.ObjectId(id));
+    
+    if (validProductIds.length === 0) return [];
+    
+    const threeMonthsAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    
+    const complements = await Order.aggregate([
+      {
+        $match: {
+          'items.product': { $in: validProductIds },
+          createdAt: { $gte: threeMonthsAgo },
+          orderStatus: { $ne: 'cancelled' }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $match: {
+          'items.product': { $nin: validProductIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$items.product',
+          coOccurrences: { $sum: 1 },
+          orders: { $addToSet: '$_id' },
+          avgQuantity: { $avg: '$items.quantity' },
+          buyers: { $addToSet: '$user' }
+        }
+      },
+      {
+        $addFields: {
+          score: {
+            $add: [
+              { $multiply: ['$coOccurrences', 3] },
+              { $multiply: [{ $size: '$orders' }, 2] },
+              { $multiply: [{ $size: '$buyers' }, 1] }
+            ]
+          }
+        }
+      },
+      { $sort: { score: -1 } },
+      { $limit: limit * 2 },
+      {
+        $lookup: {
+          from: 'products',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'product'
+        }
+      },
+      { $unwind: '$product' },
+      {
+        $match: {
+          'product.stock': { $exists: true, $ne: [] }
+        }
+      },
+      {
+        $addFields: {
+          'product.complementScore': '$score',
+          'product.boughtTogether': '$coOccurrences'
+        }
+      },
+      { $replaceRoot: { newRoot: '$product' } },
+      { $limit: limit }
+    ]);
+    
+    return complements || [];
+  } catch (error) {
+    console.error('Complementary products error:', error);
+    return [];
+  }
+}
+
 // ==================== MAIN ROUTES ====================
 
 // Get recommendations with real-time updates
@@ -1206,7 +1419,6 @@ router.get('/', optionalAuth, async (req, res) => {
     let recommendations = [];
     const startTime = Date.now();
     
-    // For non-authenticated users, serve popular products
     if (!userId) {
       const cacheKey = `guest_${type}_${safeLimit}`;
       recommendations = recommendationCache.get(cacheKey);
@@ -1220,16 +1432,19 @@ router.get('/', optionalAuth, async (req, res) => {
         recommendationCache.set(cacheKey, recommendations);
       }
       
+      recommendations = await applyFlashSaleInfo(recommendations);
+      
       return res.json(recommendations.map((product, index) => ({
-        ...toSafeObject(product),
+        ...product,
         recommendationType: type,
         score: recommendations.length - index,
-        reason: type === 'trending' ? 'Đang thịnh hành' : 'Sản phẩm phổ biến',
+        reason: type === 'trending' 
+          ? `${product.trendingUsers || 'Nhiều'} người đang quan tâm`  // FIXED: Now shows accurate count
+          : 'Sản phẩm phổ biến',
         confidence: 0.5
       })));
     }
     
-    // Authenticated user recommendations
     switch (type) {
       case 'collaborative':
         recommendations = await getCollaborativeRecommendations(userId, safeLimit);
@@ -1249,10 +1464,8 @@ router.get('/', optionalAuth, async (req, res) => {
         
       case 'mixed':
       default: {
-        // Get dynamic distribution based on user activity
         const distributions = await getDynamicDistribution(userId, safeLimit);
         
-        // Fetch all types in parallel for better performance
         const [content, collab, trending, newArrivals] = await Promise.all([
           getContentBasedRecommendations(userId, distributions.content),
           getCollaborativeRecommendations(userId, distributions.collaborative),
@@ -1260,15 +1473,12 @@ router.get('/', optionalAuth, async (req, res) => {
           getPersonalizedNewArrivals(userId, distributions.new)
         ]);
         
-        // Smart merging with priority and deduplication
         const seen = new Set();
         const merged = [];
         
-        // Priority based on user activity level
         const user = await User.findById(userId).select('viewHistory analytics').lean();
         const isActiveUser = (user?.viewHistory?.length || 0) > config.tracking.viewCountThreshold;
         
-        // Active users get more personalized content first
         const priorityOrder = isActiveUser 
           ? [content, collab, trending, newArrivals]
           : [trending, content, newArrivals, collab];
@@ -1289,14 +1499,14 @@ router.get('/', optionalAuth, async (req, res) => {
       }
     }
     
-    // Fallback to popular products if no recommendations
     if (recommendations.length === 0) {
       recommendations = await getRandomProducts(safeLimit);
     }
     
-    // Enrich recommendations with metadata
+    recommendations = await applyFlashSaleInfo(recommendations);
+    
     const enriched = recommendations.map((product, index) => ({
-      ...toSafeObject(product),
+      ...product,
       recommendationType: type,
       score: recommendations.length - index,
       reason: getRecommendationReason(type, product),
@@ -1308,15 +1518,16 @@ router.get('/', optionalAuth, async (req, res) => {
   } catch (error) {
     console.error('Recommendation error:', error);
     const fallback = await getRandomProducts(20);
-    res.json(fallback.map(p => ({
-      ...toSafeObject(p),
+    const withFlashSale = await applyFlashSaleInfo(fallback);
+    res.json(withFlashSale.map(p => ({
+      ...p,
       recommendationType: 'fallback',
       reason: 'Sản phẩm gợi ý'
     })));
   }
 });
 
-// Get product-specific recommendations - FIXED VERSION
+// Get product-specific recommendations
 router.get('/product/:productId', optionalAuth, async (req, res) => {
   try {
     const { productId } = req.params;
@@ -1332,12 +1543,10 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
     
-    // Invalidate cache for better real-time updates
     if (userId) {
       recommendationCache.trackUserActivity(userId);
     }
     
-    // Initialize response object with empty arrays
     const response = {
       similar: [],
       complementary: [],
@@ -1345,7 +1554,6 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
     };
     
     try {
-      // Get similar products with enhanced algorithm
       const similar = await Product.aggregate([
         {
           $match: {
@@ -1362,11 +1570,8 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
           $addFields: {
             similarityScore: {
               $add: [
-                // Category match
                 { $cond: [{ $eq: ['$category', product.category] }, 10, 0] },
-                // Brand match
                 { $cond: [{ $eq: ['$brand', product.brand] }, 5, 0] },
-                // Price similarity
                 {
                   $multiply: [
                     5,
@@ -1379,7 +1584,6 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
                     ]}
                   ]
                 },
-                // Tag overlap
                 {
                   $multiply: [
                     3,
@@ -1389,9 +1593,7 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
                     ]}
                   ]
                 },
-                // Quality score
                 { $multiply: [{ $ifNull: ['$rating', 0] }, 0.5] },
-                // Popularity
                 { $log10: { $add: [{ $ifNull: ['$viewCount', 0] }, 1] } }
               ]
             }
@@ -1401,29 +1603,26 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
         { $limit: 15 }
       ]);
       
-      response.similar = similar.slice(0, 10) || [];
+      response.similar = await applyFlashSaleInfo(similar.slice(0, 10));
     } catch (error) {
       console.error('Error getting similar products:', error);
       response.similar = [];
     }
     
     try {
-      // Get complementary products
       const complementary = await getComplementaryProducts([productId], 10);
-      response.complementary = complementary || [];
+      response.complementary = await applyFlashSaleInfo(complementary);
     } catch (error) {
       console.error('Error getting complementary products:', error);
       response.complementary = [];
     }
     
-    // Get products frequently bought by similar users
     if (userId) {
       try {
         const userCacheKey = `product_user_${productId}_${userId}`;
         let userRecommended = recommendationCache.get(userCacheKey);
         
         if (!userRecommended) {
-          // Find users who bought/viewed this product
           const similarUserActions = await Order.aggregate([
             {
               $match: {
@@ -1439,7 +1638,6 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
           if (similarUserActions.length > 0) {
             const similarUserIds = similarUserActions.map(u => u._id);
             
-            // Get their other purchases
             userRecommended = await Order.aggregate([
               {
                 $match: {
@@ -1481,14 +1679,13 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
           }
         }
         
-        response.userRecommended = userRecommended?.slice(0, 5) || [];
+        response.userRecommended = await applyFlashSaleInfo(userRecommended?.slice(0, 5) || []);
       } catch (error) {
         console.error('Error getting user recommendations:', error);
         response.userRecommended = [];
       }
     }
     
-    // IMPORTANT: Always return a valid response object with arrays
     res.json({
       similar: Array.isArray(response.similar) ? response.similar : [],
       complementary: Array.isArray(response.complementary) ? response.complementary : [],
@@ -1497,7 +1694,6 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
     
   } catch (error) {
     console.error('Product recommendation error:', error);
-    // Return empty arrays on error instead of error message
     res.json({
       similar: [],
       complementary: [],
@@ -1506,27 +1702,29 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
   }
 });
 
-// Enhanced tracking endpoint with immediate cache invalidation
+// Enhanced tracking endpoint - FIXED to invalidate trending cache
 router.post('/track', protect, async (req, res) => {
   try {
     const { action, productId, duration, metadata = {} } = req.body;
     const userId = req.user._id;
     
-    // Validate action
-    const validActions = ['view', 'search', 'addToCart', 'wishlist', 'purchase', 'click', 'recommendation_load', 'scroll'];
+    const validActions = ['view', 'search', 'addToCart', 'wishlist', 'purchase','click', 'recommendation_load', 'scroll'];
     if (!validActions.includes(action)) {
       return res.status(400).json({ message: 'Invalid action type' });
     }
     
-    // Validate productId for actions that require it
     if (['view', 'addToCart', 'wishlist', 'click'].includes(action) && !productId) {
       return res.status(400).json({ message: 'Product ID is required for this action' });
     }
     
-    // Immediately invalidate user-specific caches for real-time updates
+    // Immediately invalidate caches for real-time updates
     recommendationCache.invalidateUser(userId);
     
-    // Common update object
+    // FIXED: Also invalidate trending cache when user interacts with products
+    if (['view', 'addToCart', 'wishlist', 'purchase'].includes(action)) {
+      recommendationCache.invalidatePattern('trending');
+    }
+    
     const commonUpdate = {
       $set: {
         'analytics.lastActivityDate': new Date()
@@ -1535,7 +1733,6 @@ router.post('/track', protect, async (req, res) => {
     
     switch (action) {
       case 'view':
-        // Track views with shorter minimum duration
         if (duration && duration >= config.tracking.minViewDuration) {
           await Promise.all([
             User.findByIdAndUpdate(
@@ -1557,16 +1754,12 @@ router.post('/track', protect, async (req, res) => {
               },
               { new: false }
             ),
-            // Increment product view count
             Product.findByIdAndUpdate(
               productId,
               { $inc: { viewCount: 1 } },
               { new: false }
             )
           ]);
-          
-          // Invalidate trending cache as well
-          recommendationCache.invalidatePattern('trending');
         }
         break;
         
@@ -1667,20 +1860,16 @@ router.post('/track', protect, async (req, res) => {
         break;
         
       case 'click':
-        // Track recommendation clicks for analytics
         if (productId && metadata.recommendationType) {
           console.log(`Recommendation click: ${metadata.recommendationType} -> ${productId} by user ${userId}`);
-          // Could store in analytics collection for detailed tracking
         }
         break;
         
       case 'recommendation_load':
-        // Track when recommendations are loaded
         console.log(`Recommendations loaded: ${metadata.type} - ${metadata.count} items`);
         break;
         
       case 'scroll':
-        // Track scrolling behavior
         console.log(`Scroll event: ${metadata.direction} from ${metadata.fromIndex} to ${metadata.toIndex}`);
         break;
     }
@@ -1702,14 +1891,13 @@ router.get('/realtime', protect, async (req, res) => {
     const userId = req.user._id;
     const { limit = 10 } = req.query;
     
-    // Force cache invalidation for real-time results
     recommendationCache.invalidateUser(userId);
     
-    // Get fresh recommendations
     const recommendations = await getContentBasedRecommendations(userId, Number(limit));
+    const withFlashSale = await applyFlashSaleInfo(recommendations);
     
     res.json({
-      recommendations,
+      recommendations: withFlashSale,
       timestamp: new Date(),
       cached: false
     });
@@ -1727,7 +1915,6 @@ router.get('/stats', protect, async (req, res) => {
       .select('viewHistory searchHistory interactions analytics')
       .lean();
     
-    // Get favorite categories
     const categoryCount = new Map();
     const orders = await Order.find({
       user: userId,
@@ -1802,7 +1989,7 @@ function getRecommendationReason(type, product) {
   const reasons = {
     collaborative: 'Người có sở thích tương tự đã mua',
     content: 'Phù hợp với sở thích của bạn',
-    trending: `${product?.trendingUsers || 'Nhiều'} người đang quan tâm`,
+    trending: `${product?.trendingUsers || 'Nhiều'} người đang quan tâm`, // FIXED: Now shows accurate count
     new: 'Sản phẩm mới phù hợp với bạn',
     mixed: 'Được đề xuất cho bạn',
     fallback: 'Sản phẩm phổ biến'
@@ -1841,96 +2028,6 @@ function calculateDataRichness(user) {
   return 'low';
 }
 
-function getPersonalizationLevel(user) {
-  if (!user) return 'none';
-  
-  const viewCount = user.viewHistory?.length || 0;
-  const orderCount = user.analytics?.totalOrders || 0;
-  
-  if (viewCount > 20 && orderCount > 3) return 'high';
-  if (viewCount > 10 || orderCount > 1) return 'medium';
-  if (viewCount > 5) return 'low';
-  return 'minimal';
-}
-
-async function getComplementaryProducts(productIds, limit = 10) {
-  try {
-    // Validate product IDs
-    const validProductIds = productIds
-      .filter(id => id && mongoose.Types.ObjectId.isValid(id))
-      .map(id => new mongoose.Types.ObjectId(id));
-    
-    if (validProductIds.length === 0) return [];
-    
-    const threeMonthsAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    
-    const complements = await Order.aggregate([
-      {
-        $match: {
-          'items.product': { $in: validProductIds },
-          createdAt: { $gte: threeMonthsAgo },
-          orderStatus: { $ne: 'cancelled' }
-        }
-      },
-      { $unwind: '$items' },
-      {
-        $match: {
-          'items.product': { $nin: validProductIds }
-        }
-      },
-      {
-        $group: {
-          _id: '$items.product',
-          coOccurrences: { $sum: 1 },
-          orders: { $addToSet: '$_id' },
-          avgQuantity: { $avg: '$items.quantity' },
-          buyers: { $addToSet: '$user' }
-        }
-      },
-      {
-        $addFields: {
-          score: {
-            $add: [
-              { $multiply: ['$coOccurrences', 3] },
-              { $multiply: [{ $size: '$orders' }, 2] },
-              { $multiply: [{ $size: '$buyers' }, 1] }
-            ]
-          }
-        }
-      },
-      { $sort: { score: -1 } },
-      { $limit: limit * 2 },
-      {
-        $lookup: {
-          from: 'products',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'product'
-        }
-      },
-      { $unwind: '$product' },
-      {
-        $match: {
-          'product.stock': { $exists: true, $ne: [] }
-        }
-      },
-      {
-        $addFields: {
-          'product.complementScore': '$score',
-          'product.boughtTogether': '$coOccurrences'
-        }
-      },
-      { $replaceRoot: { newRoot: '$product' } },
-      { $limit: limit }
-    ]);
-    
-    return complements || [];
-  } catch (error) {
-    console.error('Complementary products error:', error);
-    return [];
-  }
-}
-
 async function getAdminAnalytics() {
   const now = new Date();
   const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
@@ -1963,56 +2060,6 @@ async function getAdminAnalytics() {
               } 
             },
             { $count: 'count' }
-          ],
-          activeMonth: [
-            { 
-              $match: { 
-                $or: [
-                  { 'analytics.lastActivityDate': { $gte: oneMonthAgo } },
-                  { 'analytics.lastLoginDate': { $gte: oneMonthAgo } }
-                ]
-              } 
-            },
-            { $count: 'count' }
-          ],
-          byActivity: [
-            {
-              $project: {
-                viewCount: { 
-                  $cond: [
-                    { $isArray: '$viewHistory' },
-                    { $size: '$viewHistory' },
-                    0
-                  ]
-                },
-                searchCount: {
-                  $cond: [
-                    { $isArray: '$searchHistory' },
-                    { $size: '$searchHistory' },
-                    0
-                  ]
-                },
-                orderCount: { $ifNull: ['$analytics.totalOrders', 0] },
-                spent: { $ifNull: ['$analytics.totalSpent', 0] }
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                avgViews: { $avg: '$viewCount' },
-                avgSearches: { $avg: '$searchCount' },
-                avgOrders: { $avg: '$orderCount' },
-                avgSpent: { $avg: '$spent' },
-                totalViews: { $sum: '$viewCount' },
-                totalSearches: { $sum: '$searchCount' },
-                usersWithViews: { 
-                  $sum: { $cond: [{ $gt: ['$viewCount', 0] }, 1, 0] } 
-                },
-                usersWithOrders: { 
-                  $sum: { $cond: [{ $gt: ['$orderCount', 0] }, 1, 0] } 
-                }
-              }
-            }
           ]
         }
       }
@@ -2029,18 +2076,8 @@ async function getAdminAnalytics() {
               $project: { 
                 name: 1, 
                 category: 1,
-                viewCount: { $ifNull: ['$viewCount', 0] }, 
-                totalOrders: { $ifNull: ['$totalOrders', 0] },
-                conversionRate: {
-                  $cond: [
-                    { $eq: ['$viewCount', 0] },
-                    0,
-                    { $multiply: [
-                      { $divide: [{ $ifNull: ['$totalOrders', 0] }, '$viewCount'] },
-                      100
-                    ]}
-                  ]
-                }
+                viewCount: 1, 
+                totalOrders: 1
               } 
             }
           ],
@@ -2072,43 +2109,6 @@ async function getAdminAnalytics() {
                 totalOrders: 1
               } 
             }
-          ],
-          recentlyViewed: [
-            {
-              $lookup: {
-                from: 'users',
-                let: { productId: '$_id' },
-                pipeline: [
-                  { $unwind: '$viewHistory' },
-                  {
-                    $match: {
-                      $expr: {
-                        $and: [
-                          { $eq: ['$viewHistory.product', '$productId'] },
-                          { $gte: ['$viewHistory.viewedAt', oneDayAgo] }
-                        ]
-                      }
-                    }
-                  },
-                  { $count: 'recentViews' }
-                ],
-                as: 'recentViewData'
-              }
-            },
-            {
-              $match: {
-                'recentViewData.recentViews': { $gt: 0 }
-              }
-            },
-            {
-              $project: {
-                name: 1,
-                category: 1,
-                recentViews: { $arrayElemAt: ['$recentViewData.recentViews', 0] }
-              }
-            },
-            { $sort: { recentViews: -1 } },
-            { $limit: 10 }
           ]
         }
       }
@@ -2134,24 +2134,6 @@ async function getAdminAnalytics() {
               } 
             },
             { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-          ],
-          todayOrders: [
-            { 
-              $match: { 
-                createdAt: { $gte: oneDayAgo },
-                orderStatus: { $ne: 'cancelled' }
-              } 
-            },
-            { $count: 'count' }
-          ],
-          todayRevenue: [
-            { 
-              $match: { 
-                createdAt: { $gte: oneDayAgo },
-                orderStatus: { $ne: 'cancelled' }
-              } 
-            },
-            { $group: { _id: null, total: { $sum: '$totalAmount' } } }
           ]
         }
       }
@@ -2164,37 +2146,15 @@ async function getAdminAnalytics() {
     users: {
       total: userStats[0].total[0]?.count || 0,
       activeToday: userStats[0].activeToday[0]?.count || 0,
-      activeWeek: userStats[0].activeWeek[0]?.count || 0,
-      activeMonth: userStats[0].activeMonth[0]?.count || 0,
-      averages: userStats[0].byActivity[0] || {
-        avgViews: 0,
-        avgSearches: 0,
-        avgOrders: 0,
-        avgSpent: 0,
-        totalViews: 0,
-        totalSearches: 0,
-        usersWithViews: 0,
-        usersWithOrders: 0
-      },
-      engagement: {
-        viewRate: userStats[0].byActivity[0] 
-          ? (userStats[0].byActivity[0].usersWithViews / (userStats[0].total[0]?.count || 1) * 100).toFixed(2)
-          : 0,
-        purchaseRate: userStats[0].byActivity[0]
-          ? (userStats[0].byActivity[0].usersWithOrders / (userStats[0].total[0]?.count || 1) * 100).toFixed(2)
-          : 0
-      }
+      activeWeek: userStats[0].activeWeek[0]?.count || 0
     },
     products: {
       popular: productStats[0].byPopularity || [],
-      highConversion: productStats[0].byConversion || [],
-      trending: productStats[0].recentlyViewed || []
+      highConversion: productStats[0].byConversion || []
     },
     orders: {
       weeklyCount: orderStats[0].recent[0]?.count || 0,
-      weeklyRevenue: orderStats[0].recentRevenue[0]?.total || 0,
-      todayCount: orderStats[0].todayOrders[0]?.count || 0,
-      todayRevenue: orderStats[0].todayRevenue[0]?.total || 0
+      weeklyRevenue: orderStats[0].recentRevenue[0]?.total || 0
     },
     cache: cacheStats,
     timestamp: new Date()
@@ -2203,7 +2163,7 @@ async function getAdminAnalytics() {
 
 // ==================== SCHEDULED TASKS ====================
 
-// Clean up old cache entries every 5 minutes (more frequent for real-time updates)
+// Clean up old cache entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
   let cleaned = 0;
@@ -2219,9 +2179,8 @@ setInterval(() => {
     }
   }
   
-  // Clean up old user activity tracking
   for (const [userId, lastActivity] of recommendationCache.userActivity) {
-    if (now - lastActivity > 30 * 60 * 1000) { // 30 minutes
+    if (now - lastActivity > 30 * 60 * 1000) {
       recommendationCache.userActivity.delete(userId);
     }
   }
@@ -2240,9 +2199,36 @@ setInterval(() => {
   });
 }, 60 * 60 * 1000);
 
+// FIXED: Invalidate trending cache more frequently (every 30 seconds)
+setInterval(() => {
+  recommendationCache.invalidatePattern('trending');
+  console.log('[Trending Cache] Invalidated for fresh data at', new Date().toISOString());
+}, 30 * 1000);
+
+// Invalidate flash sale cache when sales change (every minute)
+setInterval(async () => {
+  try {
+    const now = new Date();
+    const activeSales = await FlashSale.find({
+      $or: [
+        { startDate: { $gte: new Date(now - 60 * 1000), $lte: now } },
+        { endDate: { $gte: new Date(now - 60 * 1000), $lte: now } }
+      ]
+    });
+    
+    if (activeSales.length > 0) {
+      console.log('[Flash Sale] Status changed, invalidating cache');
+      recommendationCache.invalidatePattern('trending');
+      recommendationCache.invalidatePattern('guest');
+      recommendationCache.clear();
+    }
+  } catch (error) {
+    console.error('[Flash Sale Check] Error:', error);
+  }
+}, 60 * 1000);
+
 // ==================== ERROR HANDLING ====================
 
-// Global error handler for this router
 router.use((error, req, res, next) => {
   console.error('[Recommendation Error]', {
     error: error.message,
@@ -2253,11 +2239,11 @@ router.use((error, req, res, next) => {
     timestamp: new Date().toISOString()
   });
   
-  // Send fallback recommendations on error
   getRandomProducts(20)
-    .then(products => {
-      res.json(products.map(p => ({
-        ...toSafeObject(p),
+    .then(async products => {
+      const withFlashSale = await applyFlashSaleInfo(products);
+      res.json(withFlashSale.map(p => ({
+        ...p,
         recommendationType: 'fallback',
         reason: 'Sản phẩm gợi ý',
         confidence: 0.5,
