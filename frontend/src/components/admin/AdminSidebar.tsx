@@ -1,4 +1,4 @@
-// src/components/admin/AdminSidebar.tsx - Updated
+// src/components/admin/AdminSidebar.tsx - Updated with Voucher menu
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
@@ -9,7 +9,9 @@ import {
   Star,
   MessageSquare,
   ChartBarIcon,
-  LogOut
+  Gift,
+  LogOut,
+  Flame
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -25,9 +27,11 @@ const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen }) => {
     { path: '/admin/products', icon: Package, label: 'Sản phẩm' },
     { path: '/admin/orders', icon: ShoppingCart, label: 'Đơn hàng' },
     { path: '/admin/customers', icon: Users, label: 'Khách hàng' },
+    { path: '/admin/vouchers', icon: Gift, label: 'Voucher' },
     { path: '/admin/reviews', icon: Star, label: 'Đánh giá' },
     { path: '/admin/recommendations', icon: ChartBarIcon, label: 'Quản lý đề xuất' },
     { path: '/admin/chat', icon: MessageSquare, label: 'Chat' },
+    { path: '/admin/flash-sales', icon: Flame, label: 'Flash Sale' },
   ];
 
   return (
