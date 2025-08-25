@@ -1,4 +1,4 @@
-// src/pages/Wishlist.tsx - Enhanced version
+// src/pages/Wishlist.tsx - Enhanced with Flash Sale Support
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from '../utils/axios';
@@ -8,11 +8,26 @@ import {
   HeartIcon, 
   TrashIcon, 
   ShoppingCartIcon,
-  ShareIcon 
+  ShareIcon,
+  BoltIcon,
+  ClockIcon
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+
+interface FlashSaleInfo {
+  saleId: string;
+  saleName: string;
+  originalPrice: number;
+  discountPrice: number;
+  discountPercentage: number;
+  endDate: string;
+  available?: number;
+  soldQuantity?: number;
+  maxQuantity?: number;
+  timeRemaining?: number;
+}
 
 interface WishlistItem {
   _id: string;
@@ -30,6 +45,13 @@ interface WishlistItem {
       color: string;
       quantity: number;
     }>;
+    // Flash Sale fields
+    isFlashSale?: boolean;
+    effectivePrice?: number;
+    flashSale?: FlashSaleInfo;
+    discountPrice?: number;
+    originalPrice?: number;
+    discountPercentage?: number;
   };
   addedAt: string;
 }
@@ -53,12 +75,59 @@ const Wishlist: React.FC = () => {
     try {
       setLoading(true);
       const { data } = await axios.get('/users/wishlist');
-      setWishlistItems(data || []);
+      const wishlistData = data || [];
+      
+      // Fetch flash sale info for products
+      const productsWithFlashSale = await fetchFlashSaleInfo(wishlistData);
+      setWishlistItems(productsWithFlashSale);
     } catch (error) {
       console.error('Error fetching wishlist:', error);
       setWishlistItems([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchFlashSaleInfo = async (wishlistData: WishlistItem[]) => {
+    try {
+      // Get product IDs
+      const productIds = wishlistData
+        .filter(item => item.product?._id)
+        .map(item => item.product._id);
+      
+      if (productIds.length === 0) return wishlistData;
+
+      // Fetch products with flash sale info
+      const productsResponse = await axios.post('/products/batch-with-flash-sale', {
+        productIds
+      });
+
+      const productsWithFlashSale = productsResponse.data || [];
+      
+      // Map flash sale info back to wishlist items
+      const flashSaleMap = new Map(
+        productsWithFlashSale.map((p: any) => [p._id, p])
+      );
+
+      return wishlistData.map(item => {
+        if (item.product?._id) {
+          const productWithFlashSale = flashSaleMap.get(item.product._id);
+          if (productWithFlashSale) {
+            return {
+              ...item,
+              product: {
+                ...item.product,
+                ...productWithFlashSale
+              }
+            };
+          }
+        }
+        return item;
+      });
+    } catch (error) {
+      console.error('Error fetching flash sale info:', error);
+      // Return original data if error
+      return wishlistData;
     }
   };
 
@@ -68,7 +137,12 @@ const Wishlist: React.FC = () => {
         productId,
         action: 'remove'
       });
-      setWishlistItems(data || []);
+      const wishlistData = data || [];
+      
+      // Fetch flash sale info for updated list
+      const productsWithFlashSale = await fetchFlashSaleInfo(wishlistData);
+      setWishlistItems(productsWithFlashSale);
+      
       setSelectedItems(prev => {
         const newSet = new Set(prev);
         newSet.delete(productId);
@@ -110,11 +184,27 @@ const Wishlist: React.FC = () => {
         return;
       }
       
+      // Check flash sale availability
+      if (item.product.isFlashSale && item.product.flashSale?.available !== undefined && item.product.flashSale.available <= 0) {
+        alert('Sản phẩm Flash Sale đã hết');
+        return;
+      }
+      
       // Use first available stock option (or implement a selection modal)
       const firstAvailable = availableStock[0];
       
       await addToCart(item.product._id, 1, firstAvailable.size, firstAvailable.color);
-      alert('Đã thêm vào giỏ hàng!');
+      
+      const hasFlashSale = item.product.isFlashSale || !!item.product.flashSale;
+      const effectivePrice = getEffectivePrice(item.product);
+      const originalPrice = getOriginalPrice(item.product);
+      const savings = hasFlashSale ? (originalPrice - effectivePrice) : 0;
+      
+      const message = hasFlashSale && savings > 0
+        ? `Đã thêm vào giỏ với giá Flash Sale! Tiết kiệm ${savings.toLocaleString('vi-VN')}₫`
+        : 'Đã thêm vào giỏ hàng!';
+      
+      alert(message);
     } catch (error: any) {
       console.error('Error adding to cart:', error);
       alert(error.response?.data?.message || 'Có lỗi xảy ra khi thêm vào giỏ hàng');
@@ -159,7 +249,32 @@ const Wishlist: React.FC = () => {
     }
   };
 
-  // Sort wishlist items
+  // Helper functions to get prices
+  const getEffectivePrice = (product: any) => {
+    if (product.effectivePrice !== undefined) {
+      return product.effectivePrice;
+    }
+    if (product.isFlashSale) {
+      return product.flashSale?.discountPrice || product.discountPrice || product.price;
+    }
+    return product.price;
+  };
+
+  const getOriginalPrice = (product: any) => {
+    if (product.isFlashSale) {
+      return product.flashSale?.originalPrice || product.originalPrice || product.price;
+    }
+    return product.price;
+  };
+
+  const getDiscountPercentage = (product: any) => {
+    if (product.isFlashSale) {
+      return product.flashSale?.discountPercentage || product.discountPercentage || 0;
+    }
+    return 0;
+  };
+
+  // Sort wishlist items (using effective price for price sorting)
   const sortedItems = [...wishlistItems].sort((a, b) => {
     switch (sortBy) {
       case 'newest':
@@ -167,9 +282,9 @@ const Wishlist: React.FC = () => {
       case 'oldest':
         return new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime();
       case 'price_low':
-        return a.product.price - b.product.price;
+        return getEffectivePrice(a.product) - getEffectivePrice(b.product);
       case 'price_high':
-        return b.product.price - a.product.price;
+        return getEffectivePrice(b.product) - getEffectivePrice(a.product);
       case 'name':
         return a.product.name.localeCompare(b.product.name, 'vi');
       default:
@@ -347,31 +462,13 @@ const Wishlist: React.FC = () => {
                 />
               </div>
 
-              {/* Product Card */}
+              {/* Product Card - Pass complete product with flash sale info */}
               <ProductCard 
                 product={item.product}
                 showRecommendationReason={false}
                 isWishlisted={true}
                 onToggleWishlist={() => removeFromWishlist(item.product._id)}
               />
-
-              {/* Action buttons overlay */}
-              <div className="absolute bottom-2 left-2 right-2 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => addToCartFromWishlist(item)}
-                  className="flex-1 bg-blue-600 text-white text-sm py-2 px-3 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-1"
-                >
-                  <ShoppingCartIcon className="h-4 w-4" />
-                  <span>Thêm vào giỏ</span>
-                </button>
-                <button
-                  onClick={() => removeFromWishlist(item.product._id)}
-                  className="bg-red-600 text-white p-2 rounded hover:bg-red-700 transition-colors"
-                  title="Xóa khỏi yêu thích"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-              </div>
 
               {/* Added date */}
               <div className="mt-2 text-xs text-gray-500 text-center">
@@ -383,64 +480,103 @@ const Wishlist: React.FC = () => {
       ) : (
         /* List View */
         <div className="space-y-4 mb-12">
-          {sortedItems.map((item) => (
-            <div 
-              key={item._id} 
-              className="flex items-center space-x-4 p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
-            >
-              {/* Selection checkbox */}
-              <input
-                type="checkbox"
-                checked={selectedItems.has(item.product._id)}
-                onChange={() => toggleSelectItem(item.product._id)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
+          {sortedItems.map((item) => {
+            const hasFlashSale = item.product.isFlashSale || !!item.product.flashSale;
+            const effectivePrice = getEffectivePrice(item.product);
+            const originalPrice = getOriginalPrice(item.product);
+            const discountPercentage = getDiscountPercentage(item.product);
+            const hasDiscount = hasFlashSale && effectivePrice < originalPrice;
 
-              {/* Product image */}
-              <Link to={`/product/${item.product._id}`}>
-                <img
-                  src={item.product.images[0] || '/placeholder.jpg'}
-                  alt={item.product.name}
-                  className="w-20 h-20 object-cover rounded-lg"
+            return (
+              <div 
+                key={item._id} 
+                className="flex items-center space-x-4 p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors relative"
+              >
+                {/* Flash Sale Badge for list view */}
+                {hasFlashSale && (
+                  <div className="absolute top-2 right-2">
+                    <div className="bg-gradient-to-r from-red-500 to-orange-500 text-white px-2 py-1 rounded-full flex items-center space-x-1 text-xs animate-pulse">
+                      <BoltIcon className="w-3 h-3" />
+                      <span className="font-bold">-{Math.round(discountPercentage)}%</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Selection checkbox */}
+                <input
+                  type="checkbox"
+                  checked={selectedItems.has(item.product._id)}
+                  onChange={() => toggleSelectItem(item.product._id)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-              </Link>
 
-              {/* Product info */}
-              <div className="flex-1 min-w-0">
-                <Link 
-                  to={`/product/${item.product._id}`}
-                  className="text-lg font-medium text-gray-900 hover:text-blue-600 line-clamp-1"
-                >
-                  {item.product.name}
+                {/* Product image */}
+                <Link to={`/product/${item.product._id}`}>
+                  <img
+                    src={item.product.images[0] || '/placeholder.jpg'}
+                    alt={item.product.name}
+                    className="w-20 h-20 object-cover rounded-lg"
+                  />
                 </Link>
-                <p className="text-gray-600">{item.product.category}</p>
-                <p className="text-lg font-semibold text-gray-900 mt-1">
-                  {item.product.price.toLocaleString('vi-VN')}₫
-                </p>
-                <p className="text-sm text-gray-500">
-                  Đã thêm: {new Date(item.addedAt).toLocaleDateString('vi-VN')}
-                </p>
-              </div>
 
-              {/* Actions */}
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => addToCartFromWishlist(item)}
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors flex items-center space-x-1"
-                >
-                  <ShoppingCartIcon className="h-4 w-4" />
-                  <span>Thêm vào giỏ</span>
-                </button>
-                <button
-                  onClick={() => removeFromWishlist(item.product._id)}
-                  className="bg-red-600 text-white p-2 rounded hover:bg-red-700 transition-colors"
-                  title="Xóa khỏi yêu thích"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
+                {/* Product info */}
+                <div className="flex-1 min-w-0">
+                  <Link 
+                    to={`/product/${item.product._id}`}
+                    className="text-lg font-medium text-gray-900 hover:text-blue-600 line-clamp-1"
+                  >
+                    {item.product.name}
+                  </Link>
+                  <p className="text-gray-600">{item.product.category}</p>
+                  
+                  {/* Price Display */}
+                  <div className="mt-1">
+                    {hasDiscount ? (
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-lg font-semibold text-red-600">
+                            {effectivePrice.toLocaleString('vi-VN')}₫
+                          </span>
+                          <span className="text-sm text-gray-400 line-through">
+                            {originalPrice.toLocaleString('vi-VN')}₫
+                          </span>
+                        </div>
+                        <div className="text-xs text-green-600 font-medium">
+                          Tiết kiệm {(originalPrice - effectivePrice).toLocaleString('vi-VN')}₫
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-lg font-semibold text-gray-900">
+                        {effectivePrice.toLocaleString('vi-VN')}₫
+                      </p>
+                    )}
+                  </div>
+
+                  <p className="text-sm text-gray-500">
+                    Đã thêm: {new Date(item.addedAt).toLocaleDateString('vi-VN')}
+                  </p>
+                </div>
+
+                {/* Actions */}
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => addToCartFromWishlist(item)}
+                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors flex items-center space-x-1"
+                  >
+                    <ShoppingCartIcon className="h-4 w-4" />
+                    <span>Thêm vào giỏ</span>
+                  </button>
+                  <button
+                    onClick={() => removeFromWishlist(item.product._id)}
+                    className="bg-red-600 text-white p-2 rounded hover:bg-red-700 transition-colors"
+                    title="Xóa khỏi yêu thích"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
