@@ -2,7 +2,9 @@
 
 Developed a **e-commerce platform** using the **MERN stack** (**MongoDB, Express.js, React, Node.js**) with **TypeScript** for enhanced type safety.
 
-**Link Demo** : {Link YouTube Demo}[https://youtu.be/SbmVvzNVjRc]
+**Link Demo**: [YouTube Demo](https://youtu.be/SbmVvzNVjRc)  
+**Link Picture of Web**: [Picture of Web]()
+
 
 ### 👤 Client Features
 - **User Authentication** with **JWT** and session management.  
