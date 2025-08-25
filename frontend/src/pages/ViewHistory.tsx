@@ -1,10 +1,29 @@
-// src/pages/ViewHistory.tsx - Fixed version
+// src/pages/ViewHistory.tsx - Enhanced with Flash Sale Support
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from '../utils/axios';
-import { ClockIcon, TrashIcon, EyeIcon } from '@heroicons/react/24/outline';
+import { 
+  ClockIcon, 
+  TrashIcon, 
+  EyeIcon,
+  BoltIcon,
+  FireIcon
+} from '@heroicons/react/24/outline';
 import { useAuth } from '../context/AuthContext';
 import OptimizedImage from '../components/OptimizedImage';
+
+interface FlashSaleInfo {
+  saleId: string;
+  saleName: string;
+  originalPrice: number;
+  discountPrice: number;
+  discountPercentage: number;
+  endDate: string;
+  available?: number;
+  soldQuantity?: number;
+  maxQuantity?: number;
+  timeRemaining?: number;
+}
 
 interface ViewHistoryItem {
   _id: string;
@@ -15,6 +34,13 @@ interface ViewHistoryItem {
     images: string[];
     category: string;
     brand?: string;
+    // Flash Sale fields
+    isFlashSale?: boolean;
+    effectivePrice?: number;
+    flashSale?: FlashSaleInfo;
+    discountPrice?: number;
+    originalPrice?: number;
+    discountPercentage?: number;
   };
   viewedAt: string;
   duration?: number;
@@ -58,8 +84,11 @@ const ViewHistory: React.FC = () => {
       console.log('📚 View history response:', response.data);
       
       const historyData = response.data || [];
-      setViewHistory(historyData);
-      groupHistoryByDate(historyData);
+      
+      // Fetch flash sale info for products
+      const productsWithFlashSale = await fetchFlashSaleInfo(historyData);
+      setViewHistory(productsWithFlashSale);
+      groupHistoryByDate(productsWithFlashSale);
       
     } catch (error: any) {
       console.error('❌ Error fetching view history:', error);
@@ -73,6 +102,49 @@ const ViewHistory: React.FC = () => {
       setViewHistory([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchFlashSaleInfo = async (historyData: ViewHistoryItem[]) => {
+    try {
+      // Get product IDs
+      const productIds = historyData
+        .filter(item => item.product?._id)
+        .map(item => item.product._id);
+      
+      if (productIds.length === 0) return historyData;
+
+      // Fetch products with flash sale info
+      const productsResponse = await axios.post('/products/batch-with-flash-sale', {
+        productIds
+      });
+
+      const productsWithFlashSale = productsResponse.data || [];
+      
+      // Map flash sale info back to history items
+      const flashSaleMap = new Map(
+        productsWithFlashSale.map((p: any) => [p._id, p])
+      );
+
+      return historyData.map(item => {
+        if (item.product?._id) {
+          const productWithFlashSale = flashSaleMap.get(item.product._id);
+          if (productWithFlashSale) {
+            return {
+              ...item,
+              product: {
+                ...item.product,
+                ...productWithFlashSale
+              }
+            };
+          }
+        }
+        return item;
+      });
+    } catch (error) {
+      console.error('Error fetching flash sale info:', error);
+      // Return original data if error
+      return historyData;
     }
   };
 
@@ -179,34 +251,30 @@ const ViewHistory: React.FC = () => {
     }, 3000);
   };
 
-  // Track when user visits this page
-  useEffect(() => {
-    if (user) {
-      const trackPageView = async () => {
-        try {
-          const token = localStorage.getItem('token');
-          if (token) {
-            await axios.post('/recommendations/track', {
-              action: 'view',
-              productId: '', // Empty for page views
-              duration: 0,
-              metadata: { 
-                source: 'view_history_page',
-                page: 'view-history'
-              }
-            }, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-          }
-        } catch (error) {
-          // Silent fail for tracking
-          console.warn('Failed to track page view:', error);
-        }
-      };
-
-      trackPageView();
+  // Helper function to get effective price
+  const getEffectivePrice = (product: any) => {
+    if (product.effectivePrice !== undefined) {
+      return product.effectivePrice;
     }
-  }, [user]);
+    if (product.isFlashSale) {
+      return product.flashSale?.discountPrice || product.discountPrice || product.price;
+    }
+    return product.price;
+  };
+
+  const getOriginalPrice = (product: any) => {
+    if (product.isFlashSale) {
+      return product.flashSale?.originalPrice || product.originalPrice || product.price;
+    }
+    return product.price;
+  };
+
+  const getDiscountPercentage = (product: any) => {
+    if (product.isFlashSale) {
+      return product.flashSale?.discountPercentage || product.discountPercentage || 0;
+    }
+    return 0;
+  };
 
   if (loading) {
     return (
@@ -266,7 +334,7 @@ const ViewHistory: React.FC = () => {
           <p className="text-gray-500 mb-6">Sản phẩm bạn đã xem sẽ hiển thị ở đây</p>
           <div className="space-y-2 text-sm text-gray-400 mb-6">
             <p>💡 Lịch sử sẽ được ghi lại khi bạn xem chi tiết sản phẩm</p>
-            <p>⏱️ Thời gian xem tối thiểu: 3 giây</p>
+            <p>⏱️ Thời gian xem tối thiểu: 1 giây</p>
           </div>
           <Link 
             to="/" 
@@ -314,67 +382,91 @@ const ViewHistory: React.FC = () => {
           </h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {items.map((item) => (
-              item.product && (
-                <Link
-                  key={item._id}
-                  to={`/product/${item.product._id}`}
-                  className="bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 p-4 border border-gray-100 group"
-                >
-                  <div className="flex space-x-3">
-                    <div className="flex-shrink-0">
-                      <OptimizedImage
-                        src={item.product.images?.[0] || '/placeholder.jpg'}
-                        alt={item.product.name}
-                        className="w-16 h-16 object-cover rounded-lg"
-                        width={64}
-                        height={64}
-                        loading="lazy"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-medium text-sm text-gray-900 line-clamp-2 group-hover:text-blue-600 transition-colors">
-                        {item.product.name}
-                      </h3>
-                      <p className="text-red-600 font-semibold mt-1">
-                        {item.product.price?.toLocaleString('vi-VN')}₫
-                      </p>
-                      <div className="flex items-center justify-between mt-2">
-                        <p className="text-xs text-gray-500">
-                          {new Date(item.viewedAt).toLocaleTimeString('vi-VN', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </p>
-                        {item.duration && item.duration > 0 && (
-                          <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">
-                            {item.duration}s
-                          </span>
+            {items.map((item) => {
+              const hasFlashSale = item.product?.isFlashSale || !!item.product?.flashSale;
+              const effectivePrice = getEffectivePrice(item.product);
+              const originalPrice = getOriginalPrice(item.product);
+              const discountPercentage = getDiscountPercentage(item.product);
+              const hasDiscount = hasFlashSale && effectivePrice < originalPrice;
+
+              return (
+                item.product && (
+                  <Link
+                    key={item._id}
+                    to={`/product/${item.product._id}`}
+                    className="bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 p-4 border border-gray-100 group relative overflow-hidden"
+                  >
+                    {/* Flash Sale Badge */}
+                    {hasFlashSale && (
+                      <div className="absolute top-2 right-2 z-10">
+                        <div className="bg-gradient-to-r from-red-500 to-orange-500 text-white px-2 py-1 rounded-full flex items-center space-x-1 text-xs animate-pulse">
+                          <BoltIcon className="w-3 h-3" />
+                          <span className="font-bold">-{Math.round(discountPercentage)}%</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex space-x-3">
+                      <div className="flex-shrink-0">
+                        <OptimizedImage
+                          src={item.product.images?.[0] || '/placeholder.jpg'}
+                          alt={item.product.name}
+                          className="w-16 h-16 object-cover rounded-lg"
+                          width={64}
+                          height={64}
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-sm text-gray-900 line-clamp-2 group-hover:text-blue-600 transition-colors">
+                          {item.product.name}
+                        </h3>
+                        
+                        {/* Price Display */}
+                        <div className="mt-1">
+                          {hasDiscount ? (
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-red-600 font-semibold">
+                                  {effectivePrice.toLocaleString('vi-VN')}₫
+                                </span>
+                                <span className="text-xs text-gray-400 line-through">
+                                  {originalPrice.toLocaleString('vi-VN')}₫
+                                </span>
+                              </div>
+                              <div className="text-xs text-green-600 font-medium">
+                                Tiết kiệm {(originalPrice - effectivePrice).toLocaleString('vi-VN')}₫
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-red-600 font-semibold">
+                              {effectivePrice.toLocaleString('vi-VN')}₫
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-xs text-gray-500">
+                            {new Date(item.viewedAt).toLocaleTimeString('vi-VN', {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                        </div>
+                        {item.product.category && (
+                          <p className="text-xs text-gray-400 mt-1">
+                            {item.product.category}
+                          </p>
                         )}
                       </div>
-                      {item.product.category && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          {item.product.category}
-                        </p>
-                      )}
                     </div>
-                  </div>
-                </Link>
-              )
-            ))}
+                  </Link>
+                )
+              );
+            })}
           </div>
         </div>
       ))}
-
-      {/* Debug info (only in development) */}
-      {process.env.NODE_ENV === 'development' && viewHistory.length > 0 && (
-        <div className="mt-8 p-4 bg-gray-50 rounded-lg text-xs text-gray-600">
-          <p><strong>Debug Info:</strong></p>
-          <p>Total items: {viewHistory.length}</p>
-          <p>Last update: {new Date().toLocaleString('vi-VN')}</p>
-          <p>User ID: {user._id}</p>
-        </div>
-      )}
     </div>
   );
 };
