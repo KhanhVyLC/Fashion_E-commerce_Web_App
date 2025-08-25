@@ -1,9 +1,26 @@
-//src/pages/ProductDetail.tsx - COMPLETE VERSION WITH REVIEW SUMMARY
+// src/pages/ProductDetail.tsx - COMPLETE VERSION WITH FLASH SALE AND SECONDARY IMAGES
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import axios from '../utils/axios';
-import { StarIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
-import { HeartIcon, ShoppingCartIcon, ShareIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { 
+  StarIcon, 
+  ChevronLeftIcon, 
+  ChevronRightIcon,
+  FireIcon,
+  ClockIcon,
+  InformationCircleIcon,
+  ChartBarIcon,
+  DocumentTextIcon,
+  SparklesIcon,
+  XMarkIcon,
+  MagnifyingGlassPlusIcon
+} from '@heroicons/react/24/solid';
+import { 
+  HeartIcon, 
+  ShoppingCartIcon, 
+  ShareIcon, 
+  ArrowLeftIcon 
+} from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
@@ -11,6 +28,28 @@ import RecommendationSection from '../components/RecommendationSection';
 import StockBadge from '../components/StockBadge';
 import OptimizedImage from '../components/OptimizedImage';
 import ReviewSummary from '../components/ReviewSummary';
+
+// Interfaces
+interface SecondaryImage {
+  _id?: string;
+  url: string;
+  type: 'detail' | 'size_chart' | 'instruction' | 'material' | 'other';
+  caption: string;
+  order: number;
+}
+
+interface FlashSaleInfo {
+  inFlashSale: boolean;
+  sale?: {
+    _id: string;
+    name: string;
+    endDate: string;
+    originalPrice: number;
+    discountPrice: number;
+    discountPercentage: number;
+    available: number;
+  };
+}
 
 interface ProductStockItem {
   size: string;
@@ -24,6 +63,7 @@ interface Product {
   description: string;
   price: number;
   images: string[];
+  secondaryImages?: SecondaryImage[];
   category: string;
   subcategory?: string;
   brand?: string;
@@ -67,6 +107,8 @@ const ProductDetail: React.FC = () => {
   
   // Product state
   const [product, setProduct] = useState<Product | null>(null);
+  const [flashSaleInfo, setFlashSaleInfo] = useState<FlashSaleInfo | null>(null);
+  const [timeLeft, setTimeLeft] = useState({ hours: 0, minutes: 0, seconds: 0 });
   const [reviews, setReviews] = useState<Review[]>([]);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   
@@ -84,17 +126,71 @@ const ProductDetail: React.FC = () => {
   const [wishlistLoading, setWishlistLoading] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
   const [showImageModal, setShowImageModal] = useState(false);
+  const [showSecondaryImageModal, setShowSecondaryImageModal] = useState(false);
+  const [selectedSecondaryImage, setSelectedSecondaryImage] = useState<SecondaryImage | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'details' | 'reviews' | 'care'>('details');
+  const [showSecondaryImages, setShowSecondaryImages] = useState(false);
   
   // Recommendation state
   const [showRecommendations, setShowRecommendations] = useState(false);
+  
+  // Timer ref for cleanup
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
   
   // View tracking refs
   const viewStartTime = useRef<number>(Date.now());
   const hasTrackedView = useRef<boolean>(false);
   const trackingTimeout = useRef<NodeJS.Timeout | null>(null);
   const pageLoadTime = useRef<number>(Date.now());
+
+  // Fetch Flash Sale info
+  const fetchFlashSaleInfo = async () => {
+    if (!id) return;
+    
+    try {
+      const { data } = await axios.get(`/flash-sales/product/${id}`);
+      setFlashSaleInfo(data);
+      
+      if (data.inFlashSale && data.sale) {
+        // Start countdown
+        const endTime = new Date(data.sale.endDate).getTime();
+        startCountdown(endTime);
+      }
+    } catch (error) {
+      console.error('Error fetching flash sale info:', error);
+    }
+  };
+
+  // Countdown timer
+  const startCountdown = (endTime: number) => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    
+    const updateTimer = () => {
+      const now = new Date().getTime();
+      const distance = endTime - now;
+      
+      if (distance < 0) {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+        setTimeLeft({ hours: 0, minutes: 0, seconds: 0 });
+        setFlashSaleInfo(null); // Flash sale ended
+        return;
+      }
+      
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+      
+      setTimeLeft({ hours, minutes, seconds });
+    };
+    
+    updateTimer(); // Initial call
+    timerRef.current = setInterval(updateTimer, 1000);
+  };
 
   // Initialize and fetch data
   useEffect(() => {
@@ -107,15 +203,19 @@ const ProductDetail: React.FC = () => {
       
       // Fetch data
       fetchProductData();
+      fetchFlashSaleInfo();
       
       // Scroll to top
       window.scrollTo(0, 0);
     }
     
     return () => {
-      // Cleanup tracking timeout
+      // Cleanup timers
       if (trackingTimeout.current) {
         clearTimeout(trackingTimeout.current);
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
       }
     };
   }, [id]);
@@ -132,7 +232,6 @@ const ProductDetail: React.FC = () => {
   // Show recommendations after product loads
   useEffect(() => {
     if (product && !loading) {
-      // Small delay to ensure everything is loaded
       const timer = setTimeout(() => {
         setShowRecommendations(true);
       }, 100);
@@ -141,154 +240,110 @@ const ProductDetail: React.FC = () => {
     }
   }, [product, loading]);
 
-  // Advanced view tracking with multiple triggers
-  useEffect(() => {
-    if (!user || !id || !product) return;
-
-    const trackProductView = async (trigger: string = 'auto') => {
-      if (hasTrackedView.current) return;
-      
-      const viewDuration = Math.floor((Date.now() - viewStartTime.current) / 1000);
-      
-      // Only track if viewed for at least 3 seconds
-      if (viewDuration < 3) {
-        // Schedule tracking after remaining time
-        const remainingTime = (3 - viewDuration) * 1000;
-        trackingTimeout.current = setTimeout(() => {
-          trackProductView('delayed');
-        }, remainingTime);
-        return;
-      }
-      
-      hasTrackedView.current = true;
-      
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) return;
-
-        console.log(`📊 Tracking product view: ${product.name} (${viewDuration}s) - Trigger: ${trigger}`);
-        
-        // Enhanced tracking with more metadata
-        const trackingData = {
-          action: 'view',
-          productId: id,
-          duration: Math.min(viewDuration, 3600), // Cap at 1 hour
-          metadata: { 
-            source: 'product_detail',
-            trigger: trigger,
-            category: product.category,
-            brand: product.brand,
-            price: product.price,
-            pageLoadTime: Math.floor((Date.now() - pageLoadTime.current) / 1000),
-            deviceType: window.innerWidth < 768 ? 'mobile' : 'desktop'
-          }
-        };
-        
-        // Send to both endpoints
-        await Promise.all([
-          // Recommendations tracking
-          axios.post('/recommendations/track', trackingData, {
-            headers: { Authorization: `Bearer ${token}` }
-          }),
-          
-          // User view history
-          axios.post('/users/view-history', {
-            productId: id,
-            duration: viewDuration,
-            source: 'product_detail'
-          }, {
-            headers: { Authorization: `Bearer ${token}` }
-          })
-        ]);
-        
-        console.log('✅ View tracked successfully');
-      } catch (error) {
-        console.warn('Failed to track view:', error);
-      }
-    };
-
-    // Multiple tracking triggers for better accuracy
-    
-    // 1. Track on visibility change
-    const handleVisibilityChange = () => {
-      if (document.hidden && !hasTrackedView.current) {
-        trackProductView('visibility_change');
-      }
-    };
-
-    // 2. Track on page unload
-    const handleBeforeUnload = () => {
-      if (!hasTrackedView.current) {
-        trackProductView('page_unload');
-      }
-    };
-    
-    // 3. Track on route change
-    const handleRouteChange = () => {
-      if (!hasTrackedView.current) {
-        trackProductView('route_change');
-      }
-    };
-    
-    // 4. Track on scroll (user engaged with content)
-    let hasScrolled = false;
-    const handleScroll = () => {
-      if (!hasScrolled && window.scrollY > 100) {
-        hasScrolled = true;
-        const scrollDuration = Math.floor((Date.now() - viewStartTime.current) / 1000);
-        if (scrollDuration >= 3 && !hasTrackedView.current) {
-          trackProductView('user_scroll');
-        }
-      }
-    };
-
-    // 5. Initial delayed tracking
-    trackingTimeout.current = setTimeout(() => {
-      trackProductView('timer');
-    }, 3500);
-
-    // Add all event listeners
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('popstate', handleRouteChange);
-    window.addEventListener('scroll', handleScroll, { passive: true });
-
-    return () => {
-      // Cleanup all listeners
-      if (trackingTimeout.current) {
-        clearTimeout(trackingTimeout.current);
-      }
-      
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('popstate', handleRouteChange);
-      window.removeEventListener('scroll', handleScroll);
-      
-      // Final tracking attempt
-      trackProductView('cleanup');
-    };
-  }, [user, id, product]);
-
   // Update stock when selection changes
   useEffect(() => {
     if (product && selectedSize && selectedColor) {
       const stockItem = product.stock?.find(
         (item) => item.size === selectedSize && item.color === selectedColor
       );
-      setCurrentStock(stockItem ? stockItem.quantity : 0);
+      let availableStock = stockItem ? stockItem.quantity : 0;
+      
+      // Check flash sale limit
+      if (flashSaleInfo?.inFlashSale && flashSaleInfo.sale) {
+        availableStock = Math.min(availableStock, flashSaleInfo.sale.available);
+      }
+      
+      setCurrentStock(availableStock);
     }
-  }, [product, selectedSize, selectedColor]);
+  }, [product, selectedSize, selectedColor, flashSaleInfo]);
+
+  // Get effective price (flash sale or regular)
+  const getEffectivePrice = () => {
+    if (flashSaleInfo?.inFlashSale && flashSaleInfo.sale) {
+      return flashSaleInfo.sale.discountPrice;
+    }
+    return product?.price || 0;
+  };
+
+  // Get original price for display
+  const getOriginalPrice = () => {
+    if (flashSaleInfo?.inFlashSale && flashSaleInfo.sale) {
+      return flashSaleInfo.sale.originalPrice;
+    }
+    // Show fake discount for non-flash sale items under 1M
+    if (product && product.price < 1000000) {
+      return product.price * 1.25;
+    }
+    return null;
+  };
+
+  // Get discount percentage
+  const getDiscountPercentage = () => {
+    if (flashSaleInfo?.inFlashSale && flashSaleInfo.sale) {
+      return flashSaleInfo.sale.discountPercentage;
+    }
+    if (product && product.price < 1000000) {
+      return 20; // Default discount
+    }
+    return 0;
+  };
+
+  // Group secondary images by type
+  const getGroupedSecondaryImages = () => {
+    if (!product?.secondaryImages) return {};
+    
+    const grouped: Record<string, SecondaryImage[]> = {};
+    product.secondaryImages.forEach(img => {
+      if (!grouped[img.type]) {
+        grouped[img.type] = [];
+      }
+      grouped[img.type].push(img);
+    });
+    
+    // Sort each group by order
+    Object.keys(grouped).forEach(type => {
+      grouped[type].sort((a, b) => a.order - b.order);
+    });
+    
+    return grouped;
+  };
+
+  // Get secondary image type label
+  const getImageTypeLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      detail: 'Chi tiết sản phẩm',
+      size_chart: 'Bảng size',
+      instruction: 'Hướng dẫn sử dụng',
+      material: 'Chất liệu',
+      other: 'Khác'
+    };
+    return labels[type] || type;
+  };
+
+  // Get secondary image type icon
+  const getImageTypeIcon = (type: string) => {
+    switch (type) {
+      case 'detail':
+        return <InformationCircleIcon className="w-5 h-5" />;
+      case 'size_chart':
+        return <ChartBarIcon className="w-5 h-5" />;
+      case 'instruction':
+        return <DocumentTextIcon className="w-5 h-5" />;
+      case 'material':
+        return <SparklesIcon className="w-5 h-5" />;
+      default:
+        return <InformationCircleIcon className="w-5 h-5" />;
+    }
+  };
 
   // Data fetching functions
   const fetchProductData = async () => {
     try {
       setLoading(true);
       
-      // Fetch product details
       const { data } = await axios.get(`/products/${id}`);
       setProduct(data);
       
-      // Set default selections
       if (data.sizes?.length > 0) {
         setSelectedSize(data.sizes[0]);
       }
@@ -296,7 +351,6 @@ const ProductDetail: React.FC = () => {
         setSelectedColor(data.colors[0]);
       }
       
-      // Fetch related data in parallel
       await Promise.all([
         fetchReviews(),
         fetchRelatedProducts(data.category, data._id)
@@ -325,10 +379,7 @@ const ProductDetail: React.FC = () => {
   const fetchRelatedProducts = async (category: string, excludeId: string) => {
     try {
       const { data } = await axios.get('/products', {
-        params: {
-          category,
-          limit: 6
-        }
+        params: { category, limit: 6 }
       });
       const filtered = (data.products || data).filter((p: Product) => p._id !== excludeId);
       setRelatedProducts(filtered.slice(0, 5));
@@ -374,7 +425,9 @@ const ProductDetail: React.FC = () => {
 
     if (currentStock === 0) {
       showToast({
-        message: 'Sản phẩm này đã hết hàng!',
+        message: flashSaleInfo?.inFlashSale 
+          ? 'Flash Sale đã hết hàng!' 
+          : 'Sản phẩm này đã hết hàng!',
         type: 'error'
       });
       return;
@@ -382,7 +435,9 @@ const ProductDetail: React.FC = () => {
 
     if (quantity > currentStock) {
       showToast({
-        message: `Chỉ còn ${currentStock} sản phẩm trong kho!`,
+        message: flashSaleInfo?.inFlashSale 
+          ? `Flash Sale chỉ còn ${currentStock} sản phẩm!` 
+          : `Chỉ còn ${currentStock} sản phẩm trong kho!`,
         type: 'warning'
       });
       return;
@@ -390,6 +445,7 @@ const ProductDetail: React.FC = () => {
 
     setAddingToCart(true);
     try {
+      // The backend will automatically detect and apply flash sale price
       await addToCart(product._id, quantity, selectedSize, selectedColor);
       
       // Track add to cart action
@@ -404,8 +460,9 @@ const ProductDetail: React.FC = () => {
               size: selectedSize,
               color: selectedColor,
               quantity: quantity,
-              price: product.price,
-              totalValue: product.price * quantity
+              price: getEffectivePrice(),
+              isFlashSale: flashSaleInfo?.inFlashSale || false,
+              totalValue: getEffectivePrice() * quantity
             }
           }, {
             headers: { Authorization: `Bearer ${token}` }
@@ -418,12 +475,25 @@ const ProductDetail: React.FC = () => {
       // Update local stock display
       setCurrentStock(prev => Math.max(0, prev - quantity));
       
+      // Update flash sale available quantity if applicable
+      if (flashSaleInfo?.inFlashSale && flashSaleInfo.sale) {
+        setFlashSaleInfo({
+          ...flashSaleInfo,
+          sale: {
+            ...flashSaleInfo.sale,
+            available: Math.max(0, flashSaleInfo.sale.available - quantity)
+          }
+        });
+      }
+      
       // Reset quantity
       setQuantity(1);
       
       // Show success message
       showToast({
-        message: `Đã thêm ${quantity} sản phẩm vào giỏ hàng!`,
+        message: flashSaleInfo?.inFlashSale 
+          ? `🔥 Đã thêm ${quantity} sản phẩm Flash Sale vào giỏ!`
+          : `Đã thêm ${quantity} sản phẩm vào giỏ hàng!`,
         type: 'success'
       });
       
@@ -458,30 +528,8 @@ const ProductDetail: React.FC = () => {
         action: isWishlisted ? 'remove' : 'add'
       });
       
-      // Track wishlist action
-      const token = localStorage.getItem('token');
-      if (token) {
-        try {
-          await axios.post('/recommendations/track', {
-            action: 'wishlist',
-            productId: product._id,
-            metadata: { 
-              wishlistAction: isWishlisted ? 'remove' : 'add',
-              source: 'product_detail',
-              category: product.category,
-              price: product.price
-            }
-          }, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-        } catch (trackError) {
-          console.warn('Failed to track wishlist action:', trackError);
-        }
-      }
-      
       setIsWishlisted(!isWishlisted);
       
-      // Show feedback with animation
       showToast({
         message: !isWishlisted 
           ? '❤️ Đã thêm vào danh sách yêu thích!' 
@@ -491,9 +539,8 @@ const ProductDetail: React.FC = () => {
       
     } catch (error: any) {
       console.error('Error updating wishlist:', error);
-      const errorMessage = error.response?.data?.message || 'Có lỗi xảy ra. Vui lòng thử lại!';
       showToast({
-        message: errorMessage,
+        message: error.response?.data?.message || 'Có lỗi xảy ra',
         type: 'error'
       });
     } finally {
@@ -509,11 +556,10 @@ const ProductDetail: React.FC = () => {
       if (navigator.share) {
         await navigator.share({
           title: product.name,
-          text: `Xem sản phẩm ${product.name} với giá ${product.price.toLocaleString('vi-VN')}₫`,
+          text: `Xem sản phẩm ${product.name} với giá ${getEffectivePrice().toLocaleString('vi-VN')}₫`,
           url: window.location.href
         });
       } else {
-        // Fallback: copy to clipboard
         await navigator.clipboard.writeText(window.location.href);
         showToast({
           message: '📋 Đã sao chép link sản phẩm!',
@@ -527,6 +573,11 @@ const ProductDetail: React.FC = () => {
     } finally {
       setShareLoading(false);
     }
+  };
+
+  const openSecondaryImageModal = (image: SecondaryImage) => {
+    setSelectedSecondaryImage(image);
+    setShowSecondaryImageModal(true);
   };
 
   // UI helper functions
@@ -557,12 +608,10 @@ const ProductDetail: React.FC = () => {
     
     document.body.appendChild(toast);
     
-    // Animate in
     requestAnimationFrame(() => {
       toast.style.transform = 'translateX(0)';
     });
     
-    // Animate out and remove
     setTimeout(() => {
       toast.style.transform = 'translateX(400px)';
       setTimeout(() => {
@@ -587,9 +636,14 @@ const ProductDetail: React.FC = () => {
     }
   };
 
-  const calculateDiscountPercentage = (originalPrice: number, currentPrice: number) => {
-    if (originalPrice <= currentPrice) return 0;
-    return Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
+  // Helper function to get image URL
+  const getImageUrl = (imagePath: string | undefined) => {
+    if (!imagePath) return '/placeholder-image.png';
+    
+    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+      return imagePath;
+    }
+    return `http://localhost:5000${imagePath.startsWith('/') ? '' : '/'}${imagePath}`;
   };
 
   // Loading state
@@ -611,11 +665,6 @@ const ProductDetail: React.FC = () => {
               <div className="h-6 bg-gray-200 rounded w-1/2"></div>
               <div className="h-10 bg-gray-200 rounded w-1/4"></div>
               <div className="h-32 bg-gray-200 rounded"></div>
-              <div className="grid grid-cols-4 gap-2">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="h-10 bg-gray-200 rounded"></div>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -628,26 +677,19 @@ const ProductDetail: React.FC = () => {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center py-16">
-          <div className="mb-6">
-            <div className="w-24 h-24 bg-gray-200 rounded-full mx-auto flex items-center justify-center">
-              <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-          </div>
           <h2 className="text-2xl font-semibold text-gray-800 mb-4">Không tìm thấy sản phẩm</h2>
-          <p className="text-gray-600 mb-6">Sản phẩm bạn tìm kiếm không tồn tại hoặc đã bị xóa.</p>
-          <Link 
-            to="/" 
-            className="inline-flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <ArrowLeftIcon className="h-5 w-5" />
-            <span>Quay lại trang chủ</span>
+          <Link to="/" className="text-blue-600 hover:underline">
+            Quay lại trang chủ
           </Link>
         </div>
       </div>
     );
   }
+
+  const effectivePrice = getEffectivePrice();
+  const originalPrice = getOriginalPrice();
+  const discountPercentage = getDiscountPercentage();
+  const groupedSecondaryImages = getGroupedSecondaryImages();
 
   // Main render
   return (
@@ -656,34 +698,16 @@ const ProductDetail: React.FC = () => {
       <nav className="mb-6 text-sm">
         <ol className="flex items-center space-x-2 flex-wrap">
           <li>
-            <Link to="/" className="text-gray-500 hover:text-gray-700 transition-colors">
-              Trang chủ
-            </Link>
+            <Link to="/" className="text-gray-500 hover:text-gray-700">Trang chủ</Link>
           </li>
           <li className="text-gray-400">/</li>
           <li>
-            <Link 
-              to={`/category/${product.category}`} 
-              className="text-gray-500 hover:text-gray-700 transition-colors"
-            >
+            <Link to={`/category/${product.category}`} className="text-gray-500 hover:text-gray-700">
               {product.category}
             </Link>
           </li>
-          {product.subcategory && (
-            <>
-              <li className="text-gray-400">/</li>
-              <li>
-                <Link 
-                  to={`/category/${product.category}/${product.subcategory}`} 
-                  className="text-gray-500 hover:text-gray-700 transition-colors"
-                >
-                  {product.subcategory}
-                </Link>
-              </li>
-            </>
-          )}
           <li className="text-gray-400">/</li>
-          <li className="text-gray-900 font-medium line-clamp-1">{product.name}</li>
+          <li className="text-gray-900 font-medium">{product.name}</li>
         </ol>
       </nav>
 
@@ -691,31 +715,29 @@ const ProductDetail: React.FC = () => {
         {/* Image Gallery */}
         <div>
           <div className="relative mb-4 group">
-            <div className="aspect-square overflow-hidden rounded-lg bg-gray-100">
-              <OptimizedImage
-                src={product.images[selectedImage] || '/placeholder.jpg'}
-                alt={product.name}
-                className="w-full h-full object-cover cursor-zoom-in"
-                width={600}
-                height={600}
-                loading="eager"
-                onLoad={() => setImageLoading(false)}
-//                onClick={() => setShowImageModal(true)}
-              />
-              
-              {/* Loading overlay */}
-              {imageLoading && (
+              <div 
+                className="aspect-square overflow-hidden rounded-lg bg-gray-100 cursor-zoom-in"
+                onClick={() => setShowImageModal(true)}
+              >
+                <OptimizedImage
+                  src={product.images[selectedImage] || '/placeholder.jpg'}
+                  alt={product.name}
+                  className="w-full h-full object-cover"
+                  width={600}
+                  height={600}
+                  loading="eager"
+                  onLoad={() => setImageLoading(false)}
+                />
+                            {imageLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>
               )}
               
-              {/* Discount badge */}
-              {product.price < 1000000 && (
-                <div className="absolute top-4 left-4 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-medium">
-                  -20%
-                </div>
-              )}
+              {/* Zoom indicator */}
+              <div className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                <MagnifyingGlassPlusIcon className="w-5 h-5" />
+              </div>
             </div>
             
             {/* Navigation arrows */}
@@ -723,46 +745,23 @@ const ProductDetail: React.FC = () => {
               <>
                 <button
                   onClick={prevImage}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow-lg opacity-0 group-hover:opacity-100 transition-all duration-200"
-                  aria-label="Previous image"
+                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow-lg opacity-0 group-hover:opacity-100 transition-all"
                 >
                   <ChevronLeftIcon className="h-5 w-5" />
                 </button>
                 <button
                   onClick={nextImage}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow-lg opacity-0 group-hover:opacity-100 transition-all duration-200"
-                  aria-label="Next image"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow-lg opacity-0 group-hover:opacity-100 transition-all"
                 >
                   <ChevronRightIcon className="h-5 w-5" />
                 </button>
               </>
             )}
-            
-            {/* Image indicators */}
-            {product.images.length > 1 && (
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex space-x-2">
-                {product.images.map((_, index) => (
-                  <button
-                    key={index}
-                    onClick={() => {
-                      setSelectedImage(index);
-                      setImageLoading(true);
-                    }}
-                    className={`transition-all duration-200 ${
-                      selectedImage === index 
-                        ? 'bg-white w-8 h-2' 
-                        : 'bg-white/50 hover:bg-white/75 w-2 h-2'
-                    } rounded-full`}
-                    aria-label={`Go to image ${index + 1}`}
-                  />
-                ))}
-              </div>
-            )}
           </div>
           
-          {/* Thumbnail gallery */}
+          {/* Thumbnails */}
           {product.images.length > 1 && (
-            <div className="flex space-x-2 overflow-x-auto pb-2 scrollbar-hide">
+            <div className="flex space-x-2 overflow-x-auto pb-2">
               {product.images.map((image, index) => (
                 <button
                   key={index}
@@ -770,10 +769,8 @@ const ProductDetail: React.FC = () => {
                     setSelectedImage(index);
                     setImageLoading(true);
                   }}
-                  className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all duration-200 ${
-                    selectedImage === index 
-                      ? 'border-blue-500 shadow-md scale-105' 
-                      : 'border-gray-200 hover:border-gray-300'
+                  className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 ${
+                    selectedImage === index ? 'border-blue-500' : 'border-gray-200'
                   }`}
                 >
                   <OptimizedImage
@@ -788,6 +785,53 @@ const ProductDetail: React.FC = () => {
               ))}
             </div>
           )}
+          
+          {/* Secondary Images Section */}
+          {product.secondaryImages && product.secondaryImages.length > 0 && (
+            <div className="mt-6">
+              <button
+                onClick={() => setShowSecondaryImages(!showSecondaryImages)}
+                className="flex items-center justify-between w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <span className="font-medium text-gray-900">Xem thêm hình ảnh chi tiết</span>
+                <ChevronRightIcon className={`w-5 h-5 transition-transform ${showSecondaryImages ? 'rotate-90' : ''}`} />
+              </button>
+              
+              {showSecondaryImages && (
+                <div className="mt-4 space-y-6">
+                  {Object.entries(groupedSecondaryImages).map(([type, images]) => (
+                    <div key={type}>
+                      <div className="flex items-center space-x-2 mb-3">
+                        {getImageTypeIcon(type)}
+                        <h3 className="font-medium text-gray-900">{getImageTypeLabel(type)}</h3>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {images.map((image, index) => (
+                          <button
+                            key={image._id || index}
+                            onClick={() => openSecondaryImageModal(image)}
+                            className="relative aspect-square overflow-hidden rounded-lg bg-gray-100 hover:opacity-80 transition-opacity"
+                          >
+                            <img
+                              src={getImageUrl(image.url)}
+                              alt={image.caption || `${getImageTypeLabel(type)} ${index + 1}`}
+                              className="w-full h-full object-cover"
+                              loading="lazy"
+                            />
+                            {image.caption && (
+                              <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-1 text-center">
+                                {image.caption}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Product Info */}
@@ -797,87 +841,105 @@ const ProductDetail: React.FC = () => {
               <h1 className="text-3xl font-bold text-gray-900 mb-2">{product.name}</h1>
               {product.brand && (
                 <p className="text-gray-600 mb-2">
-                  Thương hiệu: <Link to={`/brand/${product.brand}`} className="font-medium text-blue-600 hover:underline">{product.brand}</Link>
+                  Thương hiệu: <Link to={`/brand/${product.brand}`} className="font-medium text-blue-600 hover:underline">
+                    {product.brand}
+                  </Link>
                 </p>
               )}
             </div>
             <div className="flex items-center space-x-2 ml-4">
-              <button
-                onClick={handleShare}
-                disabled={shareLoading}
-                className="p-2 rounded-full hover:bg-gray-100 transition-colors"
-                title="Chia sẻ sản phẩm"
-              >
+              <button onClick={handleShare} className="p-2 rounded-full hover:bg-gray-100">
                 <ShareIcon className="h-6 w-6 text-gray-600" />
               </button>
-              <button
-                onClick={toggleWishlist}
-                disabled={wishlistLoading}
-                className={`p-2 rounded-full hover:bg-gray-100 transition-all ${
-                  wishlistLoading ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-                title={isWishlisted ? 'Xóa khỏi yêu thích' : 'Thêm vào yêu thích'}
-              >
+              <button onClick={toggleWishlist} disabled={wishlistLoading} className="p-2 rounded-full hover:bg-gray-100">
                 {wishlistLoading ? (
                   <div className="w-6 h-6 border-2 border-gray-300 border-t-red-500 rounded-full animate-spin"></div>
                 ) : isWishlisted ? (
-                  <HeartSolidIcon className="h-6 w-6 text-red-500 animate-pulse" />
+                  <HeartSolidIcon className="h-6 w-6 text-red-500" />
                 ) : (
-                  <HeartIcon className="h-6 w-6 text-gray-600 hover:text-red-500 transition-colors" />
+                  <HeartIcon className="h-6 w-6 text-gray-600" />
                 )}
               </button>
             </div>
           </div>
           
-          {/* Rating and Stats */}
-          <div className="flex flex-wrap items-center gap-4 mb-6">
-            <div className="flex items-center">
-              <div className="flex items-center mr-2">
-                {[...Array(5)].map((_, i) => (
-                  <StarIcon
-                    key={i}
-                    className={`h-5 w-5 ${
-                      i < Math.floor(product.rating || 0) 
-                        ? 'text-yellow-400' 
-                        : 'text-gray-300'
-                    }`}
-                  />
-                ))}
+          {/* Flash Sale Timer */}
+          {flashSaleInfo?.inFlashSale && (
+            <div className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-4 mb-6 border border-red-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <FireIcon className="w-6 h-6 text-red-500 mr-2 animate-pulse" />
+                  <span className="font-bold text-red-600 text-lg">Flash Sale</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <ClockIcon className="w-5 h-5 text-gray-600" />
+                  <div className="flex space-x-1">
+                    <span className="bg-gray-900 text-white px-2 py-1 rounded font-mono text-sm">
+                      {String(timeLeft.hours).padStart(2, '0')}
+                    </span>
+                    <span className="font-bold">:</span>
+                    <span className="bg-gray-900 text-white px-2 py-1 rounded font-mono text-sm">
+                      {String(timeLeft.minutes).padStart(2, '0')}
+                    </span>
+                    <span className="font-bold">:</span>
+                    <span className="bg-gray-900 text-white px-2 py-1 rounded font-mono text-sm">
+                      {String(timeLeft.seconds).padStart(2, '0')}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <span className="text-gray-700 font-medium">
-                {(product.rating || 0).toFixed(1)}
-              </span>
+              
+              {flashSaleInfo.sale && (
+                <div className="mt-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Đã bán trong Flash Sale</span>
+                    <span className="font-semibold">Còn {flashSaleInfo.sale.available} sản phẩm</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                    <div 
+                      className="h-full bg-gradient-to-r from-red-500 to-orange-500 rounded-full"
+                      style={{ width: '30%' }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            
-            <div className="text-gray-500 text-sm">
-              ({product.totalReviews || 0} đánh giá)
+          )}
+          
+          {/* Rating */}
+          <div className="flex items-center mb-6">
+            <div className="flex items-center mr-2">
+              {[...Array(5)].map((_, i) => (
+                <StarIcon
+                  key={i}
+                  className={`h-5 w-5 ${i < Math.floor(product.rating || 0) ? 'text-yellow-400' : 'text-gray-300'}`}
+                />
+              ))}
             </div>
-            
-            <div className="text-gray-500 text-sm">
-              {product.totalOrders || 0} đã bán
-            </div>
-            
-            <div className="text-gray-500 text-sm">
-              {product.viewCount || 0} lượt xem
-            </div>
+            <span className="text-gray-700">
+              {(product.rating || 0).toFixed(1)} ({product.totalReviews || 0} đánh giá) | {product.totalOrders || 0} đã bán
+            </span>
           </div>
 
           {/* Price */}
           <div className="mb-6">
             <div className="flex items-baseline space-x-3">
               <p className="text-3xl font-bold text-red-600">
-                {product.price.toLocaleString('vi-VN')}₫
+                {effectivePrice.toLocaleString('vi-VN')}₫
               </p>
-              {product.price < 1000000 && (
+              {originalPrice && (
                 <p className="text-lg text-gray-400 line-through">
-                  {(product.price * 1.25).toLocaleString('vi-VN')}₫
+                  {originalPrice.toLocaleString('vi-VN')}₫
                 </p>
               )}
+              {flashSaleInfo?.inFlashSale && (
+                <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-sm font-medium">
+                  Tiết kiệm {((originalPrice || 0) - effectivePrice).toLocaleString('vi-VN')}₫
+                </span>
+              )}
             </div>
-            {product.price >= 500000 && (
-              <p className="text-sm text-green-600 mt-1">
-                ✓ Miễn phí vận chuyển
-              </p>
+            {effectivePrice >= 500000 && (
+              <p className="text-sm text-green-600 mt-1">✓ Miễn phí vận chuyển</p>
             )}
           </div>
 
@@ -888,10 +950,7 @@ const ProductDetail: React.FC = () => {
             {product.tags && product.tags.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-3">
                 {product.tags.map((tag, index) => (
-                  <span 
-                    key={index}
-                    className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full"
-                  >
+                  <span key={index} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
                     #{tag}
                   </span>
                 ))}
@@ -903,12 +962,19 @@ const ProductDetail: React.FC = () => {
           {product.sizes && product.sizes.length > 0 && (
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">
-                  Kích thước
-                </label>
-                <button className="text-sm text-blue-600 hover:underline">
-                  Hướng dẫn chọn size
-                </button>
+                <label className="text-sm font-medium text-gray-700">Kích thước</label>
+                {product.secondaryImages?.some(img => img.type === 'size_chart') && (
+                  <button 
+                    onClick={() => {
+                      const sizeChartImg = product.secondaryImages?.find(img => img.type === 'size_chart');
+                      if (sizeChartImg) openSecondaryImageModal(sizeChartImg);
+                    }}
+                    className="text-sm text-blue-600 hover:underline flex items-center space-x-1"
+                  >
+                    <ChartBarIcon className="w-4 h-4" />
+                    <span>Bảng size</span>
+                  </button>
+                )}
               </div>
               <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
                 {product.sizes.map((size) => {
@@ -973,7 +1039,13 @@ const ProductDetail: React.FC = () => {
           {/* Stock Display */}
           <div className="mb-6">
             <StockBadge quantity={currentStock} />
-            {currentStock > 0 && currentStock <= 10 && (
+            {flashSaleInfo?.inFlashSale && currentStock > 0 && currentStock <= 10 && (
+              <div className="flex items-center mt-2 text-sm text-orange-600 font-medium">
+                <FireIcon className="w-4 h-4 mr-1 animate-pulse" />
+                Nhanh tay! Chỉ còn {currentStock} sản phẩm trong Flash Sale
+              </div>
+            )}
+            {!flashSaleInfo?.inFlashSale && currentStock > 0 && currentStock <= 10 && (
               <div className="flex items-center mt-2 text-sm text-orange-600">
                 <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -986,15 +1058,12 @@ const ProductDetail: React.FC = () => {
           {/* Quantity and Add to Cart */}
           <div className="flex flex-col sm:flex-row gap-4 mb-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Số lượng
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Số lượng</label>
               <div className="flex items-center border border-gray-300 rounded-lg">
                 <button
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="px-4 py-3 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="px-4 py-3 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={currentStock === 0 || quantity <= 1}
-                  aria-label="Giảm số lượng"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
@@ -1013,13 +1082,11 @@ const ProductDetail: React.FC = () => {
                   }}
                   className="w-20 text-center border-x border-gray-300 focus:outline-none py-3"
                   disabled={currentStock === 0}
-                  aria-label="Số lượng"
                 />
                 <button
                   onClick={() => setQuantity(Math.min(currentStock, quantity + 1))}
-                  className="px-4 py-3 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="px-4 py-3 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={currentStock === 0 || quantity >= currentStock}
-                  aria-label="Tăng số lượng"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1035,8 +1102,8 @@ const ProductDetail: React.FC = () => {
                 className={`flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-lg font-medium transition-all ${
                   currentStock === 0
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : addingToCart
-                    ? 'bg-gray-400 text-white cursor-wait'
+                    : flashSaleInfo?.inFlashSale
+                    ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white hover:shadow-lg transform hover:-translate-y-0.5'
                     : 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-lg transform hover:-translate-y-0.5'
                 }`}
               >
@@ -1050,7 +1117,7 @@ const ProductDetail: React.FC = () => {
                 ) : (
                   <>
                     <ShoppingCartIcon className="h-5 w-5" />
-                    Thêm vào giỏ hàng
+                    {flashSaleInfo?.inFlashSale ? 'Thêm vào giỏ hàng' : 'Thêm vào giỏ hàng'}
                   </>
                 )}
               </button>
@@ -1099,16 +1166,6 @@ const ProductDetail: React.FC = () => {
               <div>
                 <p className="font-medium text-gray-900">Cam kết chính hãng</p>
                 <p className="text-sm text-gray-600">100% hàng chính hãng, bồi thường 200% nếu phát hiện hàng giả</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start space-x-3">
-              <svg className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              <div>
-                <p className="font-medium text-gray-900">Thanh toán an toàn</p>
-                <p className="text-sm text-gray-600">Thanh toán khi nhận hàng hoặc qua các cổng thanh toán uy tín</p>
               </div>
             </div>
           </div>
@@ -1195,14 +1252,12 @@ const ProductDetail: React.FC = () => {
           
           {activeTab === 'reviews' && (
             <div className="space-y-6">
-              {/* AI Review Summary - Thêm phần này vào đầu tab reviews */}
               {reviews.length > 0 && (
                 <div className="mb-8">
                   <ReviewSummary productId={id!} />
                 </div>
               )}
               
-              {/* Reviews Section */}
               {reviews.length === 0 ? (
                 <div className="text-center py-12 bg-gray-50 rounded-lg">
                   <div className="mb-4">
@@ -1213,7 +1268,6 @@ const ProductDetail: React.FC = () => {
                 </div>
               ) : (
                 <>
-                  {/* Review summary statistics */}
                   <div className="bg-gray-50 rounded-lg p-6">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div className="text-center">
@@ -1255,7 +1309,6 @@ const ProductDetail: React.FC = () => {
                     </div>
                   </div>
                   
-                  {/* Individual reviews */}
                   <div className="space-y-4">
                     {reviews.map((review) => (
                       <div key={review._id} className="bg-white border border-gray-200 rounded-lg p-6">
@@ -1283,11 +1336,7 @@ const ProductDetail: React.FC = () => {
                                     ))}
                                   </div>
                                   <span className="text-sm text-gray-500">
-                                    {new Date(review.createdAt).toLocaleDateString('vi-VN', {
-                                      year: 'numeric',
-                                      month: 'long',
-                                      day: 'numeric'
-                                    })}
+                                    {new Date(review.createdAt).toLocaleDateString('vi-VN')}
                                   </span>
                                 </div>
                               </div>
@@ -1297,7 +1346,6 @@ const ProductDetail: React.FC = () => {
                         
                         <p className="text-gray-700 mb-4">{review.comment}</p>
                         
-                        {/* Review images if any */}
                         {review.images && review.images.length > 0 && (
                           <div className="flex gap-2 mb-4">
                             {review.images.map((image, index) => (
@@ -1305,27 +1353,11 @@ const ProductDetail: React.FC = () => {
                                 key={index}
                                 src={image}
                                 alt={`Review ${index + 1}`}
-                                className="w-24 h-24 object-cover rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => {
-                                  // Could implement image modal here
-                                }}
+                                className="w-24 h-24 object-cover rounded-lg cursor-pointer hover:opacity-80"
                               />
                             ))}
                           </div>
                         )}
-                        
-                        {/* Helpful votes */}
-                        <div className="flex items-center space-x-4 text-sm">
-                          <button className="text-gray-500 hover:text-gray-700 flex items-center space-x-1">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
-                            </svg>
-                            <span>Hữu ích ({review.helpful || 0})</span>
-                          </button>
-                          <button className="text-gray-500 hover:text-gray-700">
-                            Báo cáo
-                          </button>
-                        </div>
                       </div>
                     ))}
                   </div>
@@ -1345,6 +1377,21 @@ const ProductDetail: React.FC = () => {
                 <li>• Bảo quản nơi khô ráo, thoáng mát</li>
                 <li>• Tránh để gần nguồn nhiệt cao</li>
               </ul>
+              
+              {product.secondaryImages?.some(img => img.type === 'instruction') && (
+                <div className="mt-6">
+                  <button 
+                    onClick={() => {
+                      const instructionImg = product.secondaryImages?.find(img => img.type === 'instruction');
+                      if (instructionImg) openSecondaryImageModal(instructionImg);
+                    }}
+                    className="text-blue-600 hover:underline flex items-center space-x-2"
+                  >
+                    <DocumentTextIcon className="w-5 h-5" />
+                    <span>Xem hướng dẫn chi tiết bằng hình ảnh</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1383,10 +1430,9 @@ const ProductDetail: React.FC = () => {
         </div>
       )}
 
-      {/* AI Recommendations - FIXED WITH CONDITIONAL RENDERING */}
+      {/* AI Recommendations */}
       {showRecommendations && product && (
         <div className="space-y-12">
-          {/* Product-specific recommendations */}
           <div className="bg-gray-50 p-6 rounded-lg">
             <h2 className="text-2xl font-bold mb-6">Sản phẩm gợi ý cho bạn</h2>
             <RecommendationSection 
@@ -1397,18 +1443,14 @@ const ProductDetail: React.FC = () => {
             />
           </div>
           
-          {/* General recommendations only if logged in */}
           {user && (
-            <>
-              <RecommendationSection 
-                title="Dựa trên lịch sử xem" 
-                type="content"
-                userId={user._id}
-              />
-            </>
+            <RecommendationSection 
+              title="Dựa trên lịch sử xem" 
+              type="content"
+              userId={user._id}
+            />
           )}
           
-          {/* Trending recommendations for all users */}
           <RecommendationSection 
             title="Xu hướng hiện tại" 
             type="trending"
@@ -1417,7 +1459,7 @@ const ProductDetail: React.FC = () => {
         </div>
       )}
 
-      {/* Image Modal */}
+      {/* Primary Image Modal */}
       {showImageModal && (
         <div 
           className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
@@ -1425,7 +1467,7 @@ const ProductDetail: React.FC = () => {
         >
           <div className="relative max-w-5xl max-h-[90vh]">
             <img
-              src={product.images[selectedImage]}
+              src={getImageUrl(product.images[selectedImage])}
               alt={product.name}
               className="max-w-full max-h-full object-contain"
             />
@@ -1436,9 +1478,63 @@ const ProductDetail: React.FC = () => {
               }}
               className="absolute top-4 right-4 text-white bg-black bg-opacity-50 rounded-full p-2 hover:bg-opacity-70 transition-colors"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <XMarkIcon className="w-6 h-6" />
+            </button>
+            
+            {/* Navigation in modal */}
+            {product.images.length > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    prevImage();
+                  }}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-white bg-black bg-opacity-50 rounded-full p-2 hover:bg-opacity-70 transition-colors"
+                >
+                  <ChevronLeftIcon className="w-6 h-6" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    nextImage();
+                  }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-white bg-black bg-opacity-50 rounded-full p-2 hover:bg-opacity-70 transition-colors"
+                >
+                  <ChevronRightIcon className="w-6 h-6" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Secondary Image Modal */}
+      {showSecondaryImageModal && selectedSecondaryImage && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowSecondaryImageModal(false)}
+        >
+          <div className="relative max-w-5xl max-h-[90vh] flex flex-col">
+            <img
+              src={getImageUrl(selectedSecondaryImage.url)}
+              alt={selectedSecondaryImage.caption || getImageTypeLabel(selectedSecondaryImage.type)}
+              className="max-w-full max-h-full object-contain"
+            />
+            
+            {selectedSecondaryImage.caption && (
+              <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 text-white p-4">
+                <p className="text-center">{selectedSecondaryImage.caption}</p>
+              </div>
+            )}
+            
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSecondaryImageModal(false);
+              }}
+              className="absolute top-4 right-4 text-white bg-black bg-opacity-50 rounded-full p-2 hover:bg-opacity-70 transition-colors"
+            >
+              <XMarkIcon className="w-6 h-6" />
             </button>
           </div>
         </div>
