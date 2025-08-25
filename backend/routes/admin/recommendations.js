@@ -1,4 +1,4 @@
-// backend/routes/admin/recommendations.js - Complete Version with All Features
+// backend/routes/admin/recommendations.js - Enhanced Version with Accurate Analytics
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -7,1155 +7,305 @@ const Product = require('../../models/Product');
 const Order = require('../../models/Order');
 const { adminAuth } = require('../../middleware/adminAuth');
 
-// Get recommendation analytics - FIXED with proper date handling
-router.get('/analytics', adminAuth, async (req, res) => {
+// ==================== CONFIGURATION ====================
+const config = {
+  analytics: {
+    refreshInterval: 5 * 60 * 1000, // 5 minutes cache
+    segmentationPeriods: {
+      realtime: 15 * 60 * 1000,     // 15 minutes
+      daily: 24 * 60 * 60 * 1000,   // 1 day
+      weekly: 7 * 24 * 60 * 60 * 1000,  // 7 days
+      monthly: 30 * 24 * 60 * 60 * 1000  // 30 days
+    }
+  },
+  churnRisk: {
+    weights: {
+      lastActivity: 0.3,
+      purchaseFrequency: 0.25,
+      cartAbandonment: 0.15,
+      engagement: 0.2,
+      searchActivity: 0.1
+    },
+    thresholds: {
+      high: 70,
+      medium: 40,
+      low: 20
+    }
+  },
+  recommendations: {
+    performanceThresholds: {
+      excellent: 10,  // >10% conversion
+      good: 5,        // 5-10% conversion
+      average: 2,     // 2-5% conversion
+      poor: 0         // <2% conversion
+    }
+  }
+};
+
+// ==================== CACHE MANAGEMENT ====================
+class AnalyticsCache {
+  constructor() {
+    this.cache = new Map();
+    this.lastUpdate = new Map();
+  }
+
+  get(key) {
+    const cached = this.cache.get(key);
+    const lastUpdate = this.lastUpdate.get(key) || 0;
+    
+    if (cached && (Date.now() - lastUpdate) < config.analytics.refreshInterval) {
+      return cached;
+    }
+    return null;
+  }
+
+  set(key, data) {
+    this.cache.set(key, data);
+    this.lastUpdate.set(key, Date.now());
+  }
+
+  invalidate(pattern = null) {
+    if (pattern) {
+      for (const key of this.cache.keys()) {
+        if (key.includes(pattern)) {
+          this.cache.delete(key);
+          this.lastUpdate.delete(key);
+        }
+      }
+    } else {
+      this.cache.clear();
+      this.lastUpdate.clear();
+    }
+  }
+}
+
+const analyticsCache = new AnalyticsCache();
+
+// ==================== ENHANCED ANALYTICS ====================
+
+// Get comprehensive dashboard analytics
+router.get('/dashboard', adminAuth, async (req, res) => {
   try {
-    console.log('Admin analytics accessed by:', req.user?.email);
+    const cacheKey = 'dashboard_analytics';
+    const cached = analyticsCache.get(cacheKey);
     
-    // Get current date and date ranges
+    if (cached) {
+      return res.json(cached);
+    }
+
     const now = new Date();
-    const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
-    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
-    
-    // Overall stats with proper activity tracking
-    const [totalUsers, activeUsers30Days, activeUsers7Days] = await Promise.all([
-      User.countDocuments(),
-      User.countDocuments({
-        $or: [
-          { 'analytics.lastLoginDate': { $gte: thirtyDaysAgo, $ne: null } },
-          { 'analytics.lastActivityDate': { $gte: thirtyDaysAgo, $ne: null } }
-        ]
-      }),
-      User.countDocuments({
-        $or: [
-          { 'analytics.lastLoginDate': { $gte: sevenDaysAgo, $ne: null } },
-          { 'analytics.lastActivityDate': { $gte: sevenDaysAgo, $ne: null } }
-        ]
-      })
+    const periods = {
+      today: new Date(now.setHours(0, 0, 0, 0)),
+      yesterday: new Date(now.setDate(now.getDate() - 1)),
+      weekAgo: new Date(now.setDate(now.getDate() - 7)),
+      monthAgo: new Date(now.setMonth(now.getMonth() - 1)),
+      thirtyDaysAgo: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    };
+
+    // Parallel execution for better performance
+    const [
+      userMetrics,
+      productMetrics,
+      behaviorMetrics,
+      revenueMetrics,
+      systemHealth,
+      wishlistMetrics
+    ] = await Promise.all([
+      getUserMetrics(periods),
+      getProductMetrics(periods),
+      getBehaviorMetrics(periods),
+      getRevenueMetrics(periods),
+      getSystemHealth(),
+      getWishlistMetrics(periods)
     ]);
-    
-    // Get users with recent orders
-    const usersWithRecentOrders = await Order.distinct('user', {
-      createdAt: { $gte: thirtyDaysAgo },
-      orderStatus: { $ne: 'cancelled' }
-    });
-    
-    // Product interaction stats
-    const productStats = await Product.aggregate([
-      {
-        $match: {
-          $or: [
-            { viewCount: { $gt: 0 } },
-            { totalOrders: { $gt: 0 } }
-          ]
-        }
-      },
-      {
-        $project: {
-          name: 1,
-          category: 1,
-          viewCount: { $ifNull: ['$viewCount', 0] },
-          totalOrders: { $ifNull: ['$totalOrders', 0] },
-          conversionRate: {
-            $cond: [
-              { $eq: [{ $ifNull: ['$viewCount', 0] }, 0] },
-              0,
-              { 
-                $multiply: [
-                  { $divide: [
-                    { $ifNull: ['$totalOrders', 0] }, 
-                    { $ifNull: ['$viewCount', 1] }
-                  ]}, 
-                  100
-                ] 
-              }
-            ]
-          }
-        }
-      },
-      { $sort: { viewCount: -1 } },
-      { $limit: 20 }
-    ]);
-    
-    // User behavior patterns with proper date handling
-    const userBehaviors = await User.aggregate([
-      {
-        $project: {
-          name: { $ifNull: ['$name', 'Unknown'] },
-          email: { $ifNull: ['$email', 'No email'] },
-          viewCount: { 
-            $cond: [
-              { $isArray: '$viewHistory' },
-              { $size: '$viewHistory' },
-              0
-            ]
-          },
-          searchCount: { 
-            $cond: [
-              { $isArray: '$searchHistory' },
-              { $size: '$searchHistory' },
-              0
-            ]
-          },
-          wishlistCount: { 
-            $cond: [
-              { $isArray: '$interactions.wishlist' },
-              { $size: '$interactions.wishlist' },
-              0
-            ]
-          },
-          cartAddCount: { 
-            $cond: [
-              { $isArray: '$interactions.cartAdditions' },
-              { $size: '$interactions.cartAdditions' },
-              0
-            ]
-          },
-          totalSpent: { $ifNull: ['$analytics.totalSpent', 0] },
-          totalOrders: { $ifNull: ['$analytics.totalOrders', 0] },
-          lastLogin: {
-            $cond: [
-              { $ifNull: ['$analytics.lastActivityDate', false] },
-              '$analytics.lastActivityDate',
-              { $ifNull: ['$analytics.lastLoginDate', null] }
-            ]
-          },
-          lastActivity: { $ifNull: ['$analytics.lastActivityDate', null] },
-          registrationDate: { 
-            $ifNull: [
-              '$analytics.registrationDate', 
-              { $ifNull: ['$createdAt', null] }
-            ]
-          }
-        }
-      },
-      { $sort: { totalSpent: -1 } },
-      { $limit: 50 }
-    ]);
-    
-    res.json({
-      overview: {
-        totalUsers: totalUsers || 0,
-        activeUsers: activeUsers30Days || 0,
-        activeUsers7Days: activeUsers7Days || 0,
-        activeRate: totalUsers > 0 ? ((activeUsers30Days / totalUsers) * 100).toFixed(2) : '0',
-        usersWithRecentOrders: usersWithRecentOrders.length
-      },
-      productStats: productStats || [],
-      userBehaviors: userBehaviors || []
-    });
+
+    const dashboard = {
+      timestamp: new Date(),
+      userMetrics,
+      productMetrics,
+      behaviorMetrics,
+      revenueMetrics,
+      systemHealth,
+      wishlistMetrics,
+      recommendations: {
+        totalGenerated: await getRecommendationCount(),
+        conversionRate: await getRecommendationConversion(),
+        topPerformers: await getTopPerformingRecommendations()
+      }
+    };
+
+    analyticsCache.set(cacheKey, dashboard);
+    res.json(dashboard);
   } catch (error) {
-    console.error('Error fetching recommendation analytics:', error);
+    console.error('Dashboard analytics error:', error);
     res.status(500).json({ 
       message: error.message,
-      overview: {
-        totalUsers: 0,
-        activeUsers: 0,
-        activeUsers7Days: 0,
-        activeRate: '0',
-        usersWithRecentOrders: 0
-      },
-      productStats: [],
-      userBehaviors: []
+      fallback: getEmptyDashboard()
     });
   }
 });
 
-// Get user interaction history - FIXED with better date handling
-router.get('/user/:userId', adminAuth, async (req, res) => {
+// Get real-time user segmentation
+router.get('/segmentation', adminAuth, async (req, res) => {
   try {
-    // Validate ObjectId
-    if (!mongoose.Types.ObjectId.isValid(req.params.userId)) {
+    const segments = await getUserSegments();
+    res.json(segments);
+  } catch (error) {
+    console.error('Segmentation error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get personalization effectiveness metrics
+router.get('/personalization-metrics', adminAuth, async (req, res) => {
+  try {
+    const { period = 'weekly' } = req.query;
+    const metrics = await getPersonalizationMetrics(period);
+    res.json(metrics);
+  } catch (error) {
+    console.error('Personalization metrics error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Enhanced churn prediction with ML-like scoring
+router.post('/predict-churn/advanced', adminAuth, async (req, res) => {
+  try {
+    const { 
+      includeRecommendations = true,
+      segmentSize = 'all',
+      riskLevel = 'all'
+    } = req.body;
+
+    const predictions = await advancedChurnPrediction({
+      includeRecommendations,
+      segmentSize,
+      riskLevel
+    });
+
+    res.json(predictions);
+  } catch (error) {
+    console.error('Advanced churn prediction error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get recommendation performance by algorithm
+router.get('/algorithm-performance', adminAuth, async (req, res) => {
+  try {
+    const { days = 30 } = req.query;
+    const performance = await getAlgorithmPerformance(days);
+    res.json(performance);
+  } catch (error) {
+    console.error('Algorithm performance error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// A/B testing results for recommendations
+router.get('/ab-testing', adminAuth, async (req, res) => {
+  try {
+    const tests = await getABTestResults();
+    res.json(tests);
+  } catch (error) {
+    console.error('A/B testing error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get user journey analysis
+router.get('/user-journey/:userId', adminAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: 'Invalid user ID' });
     }
 
-    const user = await User.findById(req.params.userId)
-      .populate({
-        path: 'viewHistory.product',
-        select: 'name price images category',
-        match: { _id: { $ne: null } }
-      })
-      .populate({
-        path: 'interactions.wishlist.product',
-        select: 'name price images category',
-        match: { _id: { $ne: null } }
-      })
-      .populate({
-        path: 'interactions.cartAdditions.product',
-        select: 'name price images category',
-        match: { _id: { $ne: null } }
-      })
-      .lean();
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    
-    // Get user orders
-    const orders = await Order.find({ user: req.params.userId })
-      .populate('items.product')
-      .sort('-createdAt')
-      .limit(20)
-      .lean();
-    
-    // Calculate last activity from multiple sources
-    let lastActivityDate = user.analytics?.lastActivityDate || user.analytics?.lastLoginDate;
-    
-    // Check view history for recent activity
-    if (user.viewHistory && user.viewHistory.length > 0) {
-      const lastView = user.viewHistory
-        .filter(v => v && v.viewedAt)
-        .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))[0];
-      if (lastView && (!lastActivityDate || new Date(lastView.viewedAt) > new Date(lastActivityDate))) {
-        lastActivityDate = lastView.viewedAt;
-      }
-    }
-    
-    // Check orders for recent activity
-    if (orders.length > 0 && (!lastActivityDate || new Date(orders[0].createdAt) > new Date(lastActivityDate))) {
-      lastActivityDate = orders[0].createdAt;
-    }
-    
-    // Filter out null products and ensure data integrity
-    const safeViewHistory = (user.viewHistory || [])
-      .filter(item => item && item.product)
-      .slice(0, 50);
-    
-    const safeSearchHistory = (user.searchHistory || []).slice(0, 20);
-    
-    const safeWishlist = ((user.interactions && user.interactions.wishlist) || [])
-      .filter(item => item && item.product);
-    
-    const safeCartHistory = ((user.interactions && user.interactions.cartAdditions) || [])
-      .filter(item => item && item.product)
-      .slice(0, 20);
-    
-    res.json({
-      user: {
-        _id: user._id,
-        name: user.name || 'Unknown',
-        email: user.email || 'No email',
-        registrationDate: user.analytics?.registrationDate || user.createdAt || new Date(),
-        analytics: {
-          totalSpent: user.analytics?.totalSpent || 0,
-          totalOrders: user.analytics?.totalOrders || 0,
-          averageOrderValue: user.analytics?.averageOrderValue || 0,
-          lastLoginDate: user.analytics?.lastLoginDate || null,
-          lastActivityDate: lastActivityDate,
-          lastPurchaseDate: user.analytics?.lastPurchaseDate || null,
-          favoriteCategory: user.analytics?.favoriteCategory || null,
-          favoriteBrand: user.analytics?.favoriteBrand || null
-        }
-      },
-      viewHistory: safeViewHistory,
-      searchHistory: safeSearchHistory,
-      wishlist: safeWishlist,
-      cartHistory: safeCartHistory,
-      orders: orders || []
-    });
+    const journey = await analyzeUserJourney(userId);
+    res.json(journey);
   } catch (error) {
-    console.error('Error fetching user interactions:', error);
-    res.status(500).json({ 
-      message: error.message,
-      user: null,
-      viewHistory: [],
-      searchHistory: [],
-      wishlist: [],
-      cartHistory: [],
-      orders: []
-    });
-  }
-});
-
-// Predict churn risk - FIXED with better activity detection
-router.post('/predict-churn', adminAuth, async (req, res) => {
-  try {
-    const users = await User.find({})
-      .select('name email analytics interactions viewHistory searchHistory createdAt')
-      .lean();
-    
-    const churnPredictions = [];
-    
-    for (const user of users) {
-      // Skip invalid users
-      if (!user._id) continue;
-      
-      const prediction = await predictUserChurn(user);
-      churnPredictions.push({
-        userId: user._id,
-        name: user.name || 'Unknown',
-        email: user.email || 'No email',
-        ...prediction
-      });
-    }
-    
-    // Sort by risk score (handle undefined scores)
-    churnPredictions.sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0));
-    
-    res.json(churnPredictions);
-  } catch (error) {
-    console.error('Error predicting churn:', error);
-    res.status(500).json({ 
-      message: error.message,
-      predictions: []
-    });
-  }
-});
-
-// Improved churn prediction function with better activity detection
-async function predictUserChurn(user) {
-  let riskScore = 0;
-  const factors = [];
-  
-  // Factor 1: Days since last activity (combine login and activity dates)
-  let lastActivityDate = user.analytics?.lastActivityDate || user.analytics?.lastLoginDate;
-  
-  // Check view history for recent activity
-  if (user.viewHistory && user.viewHistory.length > 0) {
-    const recentView = user.viewHistory
-      .filter(v => v && v.viewedAt)
-      .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))[0];
-    if (recentView && (!lastActivityDate || new Date(recentView.viewedAt) > new Date(lastActivityDate))) {
-      lastActivityDate = recentView.viewedAt;
-    }
-  }
-  
-  const daysSinceActivity = lastActivityDate 
-    ? (Date.now() - new Date(lastActivityDate).getTime()) / (1000 * 60 * 60 * 24)
-    : 999;
-    
-  if (daysSinceActivity > 30) {
-    riskScore += 30;
-    factors.push({ 
-      factor: 'Không hoạt động', 
-      value: daysSinceActivity === 999 ? 'Chưa từng' : `${Math.round(daysSinceActivity)} ngày`, 
-      weight: 30 
-    });
-  } else if (daysSinceActivity > 14) {
-    riskScore += 20;
-    factors.push({ 
-      factor: 'Ít hoạt động', 
-      value: `${Math.round(daysSinceActivity)} ngày`, 
-      weight: 20 
-    });
-  }
-  
-  // Factor 2: Purchase frequency
-  try {
-    const orders = await Order.find({ user: user._id })
-      .select('createdAt orderStatus')
-      .sort('createdAt')
-      .lean();
-    
-    const completedOrders = orders.filter(o => o.orderStatus !== 'cancelled');
-    const avgDaysBetweenOrders = calculateAvgDaysBetweenOrders(completedOrders);
-    
-    if (avgDaysBetweenOrders > 60 || completedOrders.length === 0) {
-      riskScore += 25;
-      factors.push({ 
-        factor: 'Mua hàng thưa thớt', 
-        value: completedOrders.length === 0 ? 'Chưa mua' : `TB ${Math.round(avgDaysBetweenOrders)} ngày/đơn`, 
-        weight: 25 
-      });
-    }
-    
-    // Check for recent purchases
-    if (completedOrders.length > 0) {
-      const lastOrder = completedOrders[completedOrders.length - 1];
-      const daysSinceLastOrder = (Date.now() - new Date(lastOrder.createdAt).getTime()) / (1000 * 60 * 60 * 24);
-      
-      if (daysSinceLastOrder > 90) {
-        riskScore += 15;
-        factors.push({
-          factor: 'Lâu không mua hàng',
-          value: `${Math.round(daysSinceLastOrder)} ngày`,
-          weight: 15
-        });
-      }
-    }
-  } catch (error) {
-    console.error('Error calculating purchase frequency:', error);
-  }
-  
-  // Factor 3: Cart abandonment
-  const cartAdditions = user.interactions?.cartAdditions || [];
-  const totalCarts = cartAdditions.length;
-  const recentCarts = cartAdditions.filter(item => {
-    const daysSince = (Date.now() - new Date(item.timestamp).getTime()) / (1000 * 60 * 60 * 24);
-    return daysSince <= 30;
-  }).length;
-  
-  if (recentCarts > 5 && totalCarts > 0) {
-    riskScore += 15;
-    factors.push({ 
-      factor: 'Thường xuyên bỏ giỏ hàng', 
-      value: `${recentCarts} lần/tháng`, 
-      weight: 15 
-    });
-  }
-  
-  // Factor 4: Recent engagement
-  const viewHistory = user.viewHistory || [];
-  const recentViews = viewHistory.filter(v => {
-    if (!v || !v.viewedAt) return false;
-    return new Date(v.viewedAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  }).length;
-  
-  if (recentViews === 0 && viewHistory.length > 0) {
-    riskScore += 25;
-    factors.push({ 
-      factor: 'Không xem sản phẩm gần đây', 
-      value: '0 lượt xem/tuần', 
-      weight: 25 
-    });
-  } else if (recentViews < 3 && viewHistory.length > 0) {
-    riskScore += 15;
-    factors.push({ 
-      factor: 'Ít xem sản phẩm', 
-      value: `${recentViews} lượt xem/tuần`, 
-      weight: 15 
-    });
-  }
-  
-  // Factor 5: Search activity
-  const searchHistory = user.searchHistory || [];
-  const recentSearches = searchHistory.filter(s => {
-    if (!s || !s.searchedAt) return false;
-    return new Date(s.searchedAt) > new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  }).length;
-  
-  if (recentSearches === 0 && searchHistory.length > 0) {
-    riskScore += 10;
-    factors.push({ 
-      factor: 'Không tìm kiếm gần đây', 
-      value: '0 tìm kiếm/2 tuần', 
-      weight: 10 
-    });
-  }
-  
-  // Factor 6: Wishlist engagement
-  const wishlistItems = user.interactions?.wishlist || [];
-  if (wishlistItems.length > 5) {
-    // Many wishlist items but low purchase rate might indicate hesitation
-    const purchaseRate = user.analytics?.totalOrders || 0;
-    if (purchaseRate < wishlistItems.length * 0.2) {
-      riskScore += 10;
-      factors.push({
-        factor: 'Wishlist cao nhưng ít mua',
-        value: `${wishlistItems.length} items, ${purchaseRate} đơn`,
-        weight: 10
-      });
-    }
-  }
-  
-  return {
-    riskScore: Math.min(100, riskScore),
-    riskLevel: riskScore >= 70 ? 'Cao' : riskScore >= 40 ? 'Trung bình' : 'Thấp',
-    factors,
-    recommendations: getRetentionRecommendations(factors)
-  };
-}
-
-function calculateAvgDaysBetweenOrders(orders) {
-  if (!orders || orders.length < 2) return 999;
-  
-  let totalDays = 0;
-  let validPairs = 0;
-  
-  for (let i = 1; i < orders.length; i++) {
-    if (orders[i].createdAt && orders[i-1].createdAt) {
-      const days = (new Date(orders[i].createdAt) - new Date(orders[i-1].createdAt)) / (1000 * 60 * 60 * 24);
-      if (days >= 0) {
-        totalDays += days;
-        validPairs++;
-      }
-    }
-  }
-  
-  return validPairs > 0 ? totalDays / validPairs : 999;
-}
-
-function getRetentionRecommendations(factors) {
-  const recommendations = [];
-  
-  factors.forEach(factor => {
-    switch (factor.factor) {
-      case 'Không hoạt động':
-      case 'Ít hoạt động':
-        recommendations.push('Gửi email nhắc nhở với ưu đãi đặc biệt');
-        recommendations.push('Push notification về sản phẩm mới');
-        break;
-      case 'Mua hàng thưa thớt':
-      case 'Lâu không mua hàng':
-        recommendations.push('Tạo chương trình khách hàng thân thiết');
-        recommendations.push('Ưu đãi độc quyền cho khách hàng cũ');
-        recommendations.push('Email về sản phẩm tương tự đã mua');
-        break;
-      case 'Thường xuyên bỏ giỏ hàng':
-        recommendations.push('Gửi email nhắc nhở giỏ hàng với mã giảm giá');
-        recommendations.push('Hiển thị popup giữ khách khi rời trang');
-        recommendations.push('Đơn giản hóa quy trình thanh toán');
-        break;
-      case 'Không xem sản phẩm gần đây':
-      case 'Ít xem sản phẩm':
-        recommendations.push('Gửi thông báo về sản phẩm mới phù hợp');
-        recommendations.push('Email với ưu đãi "Chúng tôi nhớ bạn"');
-        break;
-      case 'Không tìm kiếm gần đây':
-        recommendations.push('Gửi email về xu hướng mới');
-        recommendations.push('Thông báo về sale theo danh mục quan tâm');
-        break;
-      case 'Wishlist cao nhưng ít mua':
-        recommendations.push('Giảm giá cho sản phẩm trong wishlist');
-        recommendations.push('Thông báo khi sản phẩm wishlist giảm giá');
-        break;
-    }
-  });
-  
-  return [...new Set(recommendations)].slice(0, 3);
-}
-
-// Get recommendation performance metrics
-router.get('/performance', adminAuth, async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    
-    const dateFilter = {};
-    if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
-    
-    // Get click-through rates and conversion metrics
-    const metrics = await User.aggregate([
-      {
-        $unwind: '$viewHistory'
-      },
-      {
-        $match: dateFilter.$gte || dateFilter.$lte ? {
-          'viewHistory.viewedAt': dateFilter
-        } : {}
-      },
-      {
-        $group: {
-          _id: '$viewHistory.source',
-          totalViews: { $sum: 1 },
-          uniqueUsers: { $addToSet: '$_id' },
-          avgDuration: { $avg: '$viewHistory.duration' }
-        }
-      },
-      {
-        $project: {
-          source: '$_id',
-          totalViews: 1,
-          uniqueUsers: { $size: '$uniqueUsers' },
-          avgDuration: { $round: ['$avgDuration', 2] }
-        }
-      }
-    ]);
-    
-    // Get conversion metrics
-    const conversionMetrics = await Order.aggregate([
-      {
-        $match: {
-          createdAt: dateFilter,
-          orderStatus: { $ne: 'cancelled' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user',
-          foreignField: '_id',
-          as: 'userData'
-        }
-      },
-      {
-        $unwind: '$userData'
-      },
-      {
-        $project: {
-          hasViewHistory: { $gt: [{ $size: '$userData.viewHistory' }, 0] },
-          hasSearchHistory: { $gt: [{ $size: '$userData.searchHistory' }, 0] },
-          totalAmount: 1
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          totalOrders: { $sum: 1 },
-          ordersWithViews: { 
-            $sum: { $cond: ['$hasViewHistory', 1, 0] }
-          },
-          ordersWithSearch: { 
-            $sum: { $cond: ['$hasSearchHistory', 1, 0] }
-          },
-          totalRevenue: { $sum: '$totalAmount' }
-        }
-      }
-    ]);
-    
-    res.json({
-      metrics,
-      conversionMetrics: conversionMetrics[0] || {
-        totalOrders: 0,
-        ordersWithViews: 0,
-        ordersWithSearch: 0,
-        totalRevenue: 0
-      },
-      period: {
-        start: startDate || 'all time',
-        end: endDate || 'now'
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching performance metrics:', error);
+    console.error('User journey error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// Get detailed user activity stats with proper date handling
-router.get('/user-activity-stats', adminAuth, async (req, res) => {
+// Export analytics data
+router.get('/export/:type', adminAuth, async (req, res) => {
   try {
-    const now = new Date();
-    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
-    const oneWeekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
-    const oneMonthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
-    const threeMonthsAgo = new Date(now - 90 * 24 * 60 * 60 * 1000);
+    const { type } = req.params;
+    const { format = 'json', startDate, endDate } = req.query;
 
-    const stats = await User.aggregate([
-      {
-        $facet: {
-          // Total users
-          totalUsers: [
-            { $count: 'count' }
-          ],
-          
-          // Active users by period - check both login and activity dates
-          activeToday: [
-            {
-              $match: {
-                $or: [
-                  { 'analytics.lastLoginDate': { $gte: oneDayAgo } },
-                  { 'analytics.lastActivityDate': { $gte: oneDayAgo } }
-                ]
-              }
-            },
-            { $count: 'count' }
-          ],
-          
-          activeThisWeek: [
-            {
-              $match: {
-                $or: [
-                  { 'analytics.lastLoginDate': { $gte: oneWeekAgo } },
-                  { 'analytics.lastActivityDate': { $gte: oneWeekAgo } }
-                ]
-              }
-            },
-            { $count: 'count' }
-          ],
-          
-          activeThisMonth: [
-            {
-              $match: {
-                $or: [
-                  { 'analytics.lastLoginDate': { $gte: oneMonthAgo } },
-                  { 'analytics.lastActivityDate': { $gte: oneMonthAgo } }
-                ]
-              }
-            },
-            { $count: 'count' }
-          ],
-          
-          // User distribution by activity
-          usersByActivity: [
-            {
-              $project: {
-                lastActivity: {
-                  $cond: [
-                    { $gt: ['$analytics.lastActivityDate', '$analytics.lastLoginDate'] },
-                    '$analytics.lastActivityDate',
-                    { $ifNull: ['$analytics.lastLoginDate', null] }
-                  ]
-                }
-              }
-            },
-            {
-              $project: {
-                activityLevel: {
-                  $cond: [
-                    { $gte: ['$lastActivity', oneDayAgo] },
-                    'veryActive',
-                    {
-                      $cond: [
-                        { $gte: ['$lastActivity', oneWeekAgo] },
-                        'active',
-                        {
-                          $cond: [
-                            { $gte: ['$lastActivity', oneMonthAgo] },
-                            'moderate',
-                            {
-                              $cond: [
-                                { $gte: ['$lastActivity', threeMonthsAgo] },
-                                'inactive',
-                                'dormant'
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                }
-              }
-            },
-            {
-              $group: {
-                _id: '$activityLevel',
-                count: { $sum: 1 }
-              }
-            }
-          ],
-          
-          // New vs returning users
-          newUsersThisMonth: [
-            {
-              $match: {
-                $or: [
-                  { 'analytics.registrationDate': { $gte: oneMonthAgo } },
-                  { createdAt: { $gte: oneMonthAgo } }
-                ]
-              }
-            },
-            { $count: 'count' }
-          ],
-          
-          // Users with purchases
-          purchasingUsers: [
-            {
-              $match: {
-                'analytics.totalOrders': { $gt: 0 }
-              }
-            },
-            { $count: 'count' }
-          ],
-          
-          // Users with recent views
-          usersWithRecentViews: [
-            {
-              $match: {
-                'viewHistory.viewedAt': { $gte: oneWeekAgo }
-              }
-            },
-            { $count: 'count' }
-          ]
-        }
-      }
-    ]);
+    const data = await exportAnalytics(type, { startDate, endDate });
 
-    // Format response
-    const result = stats[0];
-    const totalCount = result.totalUsers[0]?.count || 1;
-    
-    const response = {
-      totalUsers: totalCount,
-      activeUsers: {
-        today: result.activeToday[0]?.count || 0,
-        thisWeek: result.activeThisWeek[0]?.count || 0,
-        thisMonth: result.activeThisMonth[0]?.count || 0
-      },
-      activityDistribution: {
-        veryActive: 0,
-        active: 0,
-        moderate: 0,
-        inactive: 0,
-        dormant: 0,
-        ...result.usersByActivity.reduce((acc, item) => {
-          acc[item._id || 'dormant'] = item.count;
-          return acc;
-        }, {})
-      },
-      newUsersThisMonth: result.newUsersThisMonth[0]?.count || 0,
-      purchasingUsers: result.purchasingUsers[0]?.count || 0,
-      usersWithRecentViews: result.usersWithRecentViews[0]?.count || 0,
-      metrics: {
-        dailyActiveRate: ((result.activeToday[0]?.count || 0) / totalCount * 100).toFixed(2),
-        weeklyActiveRate: ((result.activeThisWeek[0]?.count || 0) / totalCount * 100).toFixed(2),
-        monthlyActiveRate: ((result.activeThisMonth[0]?.count || 0) / totalCount * 100).toFixed(2),
-        purchaseRate: ((result.purchasingUsers[0]?.count || 0) / totalCount * 100).toFixed(2),
-        viewEngagementRate: ((result.usersWithRecentViews[0]?.count || 0) / totalCount * 100).toFixed(2)
-      }
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error('Error fetching user activity stats:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get real-time active users (users active in last 15 minutes)
-router.get('/real-time-users', adminAuth, async (req, res) => {
-  try {
-    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    
-    const activeUsers = await User.find({
-      $or: [
-        { 'analytics.lastActivityDate': { $gte: fifteenMinutesAgo } },
-        { 'analytics.lastLoginDate': { $gte: fifteenMinutesAgo } },
-        { 'viewHistory.viewedAt': { $gte: fifteenMinutesAgo } }
-      ]
-    })
-    .select('name email analytics.lastActivityDate analytics.lastLoginDate viewHistory')
-    .sort('-analytics.lastActivityDate')
-    .limit(50)
-    .lean();
-    
-    // Process to get actual last activity
-    const processedUsers = activeUsers.map(user => {
-      let lastActivity = user.analytics?.lastActivityDate || user.analytics?.lastLoginDate;
-      
-      // Check view history
-      if (user.viewHistory && user.viewHistory.length > 0) {
-        const recentView = user.viewHistory
-          .filter(v => v && v.viewedAt)
-          .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))[0];
-        if (recentView && (!lastActivity || new Date(recentView.viewedAt) > new Date(lastActivity))) {
-          lastActivity = recentView.viewedAt;
-        }
-      }
-      
-      return {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        lastActivity: lastActivity,
-        isVeryRecent: lastActivity && new Date(lastActivity) >= fiveMinutesAgo
-      };
-    });
-    
-    // Sort by last activity
-    processedUsers.sort((a, b) => {
-      const dateA = a.lastActivity ? new Date(a.lastActivity) : new Date(0);
-      const dateB = b.lastActivity ? new Date(b.lastActivity) : new Date(0);
-      return dateB - dateA;
-    });
-    
-    res.json({
-      count: processedUsers.length,
-      veryRecentCount: processedUsers.filter(u => u.isVeryRecent).length,
-      users: processedUsers,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    console.error('Error fetching real-time users:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get product recommendation performance
-router.get('/product-performance', adminAuth, async (req, res) => {
-  try {
-    const { days = 30 } = req.query;
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    
-    // Get products with recommendation metrics
-    const productPerformance = await Product.aggregate([
-      {
-        $lookup: {
-          from: 'users',
-          let: { productId: '$_id' },
-          pipeline: [
-            { $unwind: '$viewHistory' },
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ['$viewHistory.product', '$productId'] },
-                    { $gte: ['$viewHistory.viewedAt', startDate] }
-                  ]
-                }
-              }
-            },
-            {
-              $group: {
-                _id: '$viewHistory.source',
-                count: { $sum: 1 }
-              }
-            }
-          ],
-          as: 'viewSources'
-        }
-      },
-      {
-        $project: {
-          name: 1,
-          category: 1,
-          price: 1,
-          totalViews: { $ifNull: ['$viewCount', 0] },
-          totalOrders: { $ifNull: ['$totalOrders', 0] },
-          viewSources: 1,
-          conversionRate: {
-            $cond: [
-              { $eq: ['$viewCount', 0] },
-              0,
-              { $multiply: [{ $divide: ['$totalOrders', '$viewCount'] }, 100] }
-            ]
-          }
-        }
-      },
-      { $sort: { totalViews: -1 } },
-      { $limit: 50 }
-    ]);
-    
-    res.json({
-      products: productPerformance,
-      period: `Last ${days} days`
-    });
-  } catch (error) {
-    console.error('Error fetching product performance:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get recommendation system health check
-router.get('/health', adminAuth, async (req, res) => {
-  try {
-    const health = {
-      status: 'healthy',
-      timestamp: new Date(),
-      checks: {}
-    };
-    
-    // Check database connectivity
-    try {
-      await User.findOne().limit(1);
-      health.checks.database = { status: 'ok', message: 'Database connected' };
-    } catch (dbError) {
-      health.checks.database = { status: 'error', message: dbError.message };
-      health.status = 'unhealthy';
-    }
-    
-    // Check recommendation algorithms
-    const now = new Date();
-    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
-    
-    // Check if users are being tracked
-    const recentActivityCount = await User.countDocuments({
-      $or: [
-        { 'analytics.lastActivityDate': { $gte: oneDayAgo } },
-        { 'viewHistory.viewedAt': { $gte: oneDayAgo } }
-      ]
-    });
-    
-    health.checks.userTracking = {
-      status: recentActivityCount > 0 ? 'ok' : 'warning',
-      message: `${recentActivityCount} users active in last 24 hours`,
-      count: recentActivityCount
-    };
-    
-    // Check if products are being viewed
-    const recentProductViews = await Product.countDocuments({
-      viewCount: { $gt: 0 }
-    });
-    
-    health.checks.productTracking = {
-      status: recentProductViews > 0 ? 'ok' : 'warning',
-      message: `${recentProductViews} products have been viewed`,
-      count: recentProductViews
-    };
-    
-    // Check order tracking
-    const recentOrders = await Order.countDocuments({
-      createdAt: { $gte: oneDayAgo }
-    });
-    
-    health.checks.orderTracking = {
-      status: recentOrders > 0 ? 'ok' : 'warning',
-      message: `${recentOrders} orders in last 24 hours`,
-      count: recentOrders
-    };
-    
-    res.json(health);
-  } catch (error) {
-    console.error('Error checking system health:', error);
-    res.status(500).json({
-      status: 'error',
-      message: error.message,
-      timestamp: new Date()
-    });
-  }
-});
-
-// Update recommendation settings
-router.put('/settings', adminAuth, async (req, res) => {
-  try {
-    const { settings } = req.body;
-    
-    // Validate settings
-    if (!settings || typeof settings !== 'object') {
-      return res.status(400).json({ message: 'Invalid settings format' });
-    }
-    
-    // Here you would typically save to a Settings collection
-    // For now, we'll just validate and return
-    const validSettings = {
-      recommendationTypes: settings.recommendationTypes || ['content', 'collaborative', 'trending'],
-      cacheEnabled: settings.cacheEnabled !== false,
-      cacheDuration: settings.cacheDuration || 120, // minutes
-      maxRecommendations: settings.maxRecommendations || 20,
-      minUserActivity: settings.minUserActivity || 5, // minimum views before personalization
-      weights: {
-        purchase: settings.weights?.purchase || 3,
-        view: settings.weights?.view || 0.5,
-        search: settings.weights?.search || 0.3,
-        wishlist: settings.weights?.wishlist || 1,
-        cart: settings.weights?.cart || 1.5
-      }
-    };
-    
-    res.json({
-      message: 'Settings updated successfully',
-      settings: validSettings
-    });
-  } catch (error) {
-    console.error('Error updating settings:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Export recommendation data
-router.get('/export', adminAuth, async (req, res) => {
-  try {
-    const { type = 'summary', format = 'json' } = req.query;
-    
-    let data;
-    
-    switch (type) {
-      case 'users':
-        data = await User.find({})
-          .select('name email analytics viewHistory searchHistory interactions')
-          .lean();
-        break;
-        
-      case 'products':
-        data = await Product.find({})
-          .select('name category viewCount totalOrders rating')
-          .lean();
-        break;
-        
-      case 'summary':
-      default:
-        const [users, products, orders] = await Promise.all([
-          User.countDocuments(),
-          Product.countDocuments(),
-          Order.countDocuments()
-        ]);
-        
-        data = {
-          exportDate: new Date(),
-          summary: {
-            totalUsers: users,
-            totalProducts: products,
-            totalOrders: orders
-          },
-          userMetrics: await getUserMetricsSummary(),
-          productMetrics: await getProductMetricsSummary()
-        };
-    }
-    
     if (format === 'csv') {
-      // Convert to CSV format
+      const csv = convertToCSV(data);
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=recommendations-${type}-${Date.now()}.csv`);
-      // Here you would convert data to CSV
-      res.send('CSV export not implemented yet');
+      res.setHeader('Content-Disposition', `attachment; filename=analytics-${type}-${Date.now()}.csv`);
+      res.send(csv);
     } else {
       res.json(data);
     }
   } catch (error) {
-    console.error('Error exporting data:', error);
+    console.error('Export error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// Helper functions for export
-async function getUserMetricsSummary() {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  
-  const metrics = await User.aggregate([
-    {
-      $facet: {
-        activeUsers: [
-          {
-            $match: {
-              $or: [
-                { 'analytics.lastLoginDate': { $gte: thirtyDaysAgo } },
-                { 'analytics.lastActivityDate': { $gte: thirtyDaysAgo } }
-              ]
-            }
-          },
-          { $count: 'count' }
-        ],
-        avgViewsPerUser: [
-          {
-            $project: {
-              viewCount: { $size: { $ifNull: ['$viewHistory', []] } }
-            }
-          },
-          {
-            $group: {
-              _id: null,
-              avg: { $avg: '$viewCount' }
-            }
-          }
-        ],
-        topUsers: [
-          { $sort: { 'analytics.totalSpent': -1 } },
-          { $limit: 10 },
-          {
-            $project: {
-              name: 1,
-              email: 1,
-              totalSpent: '$analytics.totalSpent',
-              totalOrders: '$analytics.totalOrders'
-            }
-          }
-        ]
-      }
-    }
+// ==================== HELPER FUNCTIONS ====================
+
+async function getUserMetrics(periods) {
+  const [
+    totalUsers,
+    newUsers,
+    activeUsers,
+    churnedUsers,
+    usersBySegment
+  ] = await Promise.all([
+    User.countDocuments(),
+    User.countDocuments({ createdAt: { $gte: periods.monthAgo } }),
+    User.countDocuments({
+      $or: [
+        { 'analytics.lastActivityDate': { $gte: periods.weekAgo } },
+        { 'analytics.lastLoginDate': { $gte: periods.weekAgo } }
+      ]
+    }),
+    User.countDocuments({
+      $and: [
+        { 'analytics.lastActivityDate': { $lt: periods.monthAgo } },
+        { 'analytics.totalOrders': { $gt: 0 } }
+      ]
+    }),
+    getUserSegmentCounts()
   ]);
-  
+
   return {
-    activeUsers30Days: metrics[0].activeUsers[0]?.count || 0,
-    avgViewsPerUser: Math.round(metrics[0].avgViewsPerUser[0]?.avg || 0),
-    topUsers: metrics[0].topUsers
+    total: totalUsers,
+    new: newUsers,
+    active: activeUsers,
+    churned: churnedUsers,
+    activeRate: ((activeUsers / totalUsers) * 100).toFixed(2),
+    churnRate: ((churnedUsers / totalUsers) * 100).toFixed(2),
+    segments: usersBySegment,
+    growth: {
+      daily: await calculateGrowthRate('daily'),
+      weekly: await calculateGrowthRate('weekly'),
+      monthly: await calculateGrowthRate('monthly')
+    }
   };
 }
 
-async function getProductMetricsSummary() {
+async function getProductMetrics(periods) {
   const metrics = await Product.aggregate([
     {
       $facet: {
-        mostViewed: [
+        topViewed: [
           { $sort: { viewCount: -1 } },
           { $limit: 10 },
-          {
-            $project: {
-              name: 1,
-              category: 1,
-              viewCount: 1,
-              totalOrders: 1
-            }
-          }
+          { $project: { name: 1, category: 1, viewCount: 1, totalOrders: 1 } }
         ],
-        bestConverting: [
-          {
-            $match: {
-              viewCount: { $gt: 0 },
-              totalOrders: { $gt: 0 }
-            }
-          },
+        topConverting: [
+          { $match: { viewCount: { $gt: 0 }, totalOrders: { $gt: 0 } } },
           {
             $addFields: {
               conversionRate: {
@@ -1168,40 +318,1403 @@ async function getProductMetricsSummary() {
           },
           { $sort: { conversionRate: -1 } },
           { $limit: 10 },
+          { $project: { name: 1, category: 1, conversionRate: 1, viewCount: 1, totalOrders: 1 } }
+        ],
+        categoryPerformance: [
           {
-            $project: {
-              name: 1,
-              category: 1,
-              conversionRate: { $round: ['$conversionRate', 2] },
-              viewCount: 1,
-              totalOrders: 1
+            $group: {
+              _id: '$category',
+              products: { $sum: 1 },
+              totalViews: { $sum: '$viewCount' },
+              totalOrders: { $sum: '$totalOrders' },
+              avgRating: { $avg: '$rating' }
+            }
+          },
+          { $sort: { totalOrders: -1 } }
+        ]
+      }
+    }
+  ]);
+
+  return metrics[0];
+}
+
+async function getBehaviorMetrics(periods) {
+  // Get daily activity for the last 30 days
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  
+  const [behaviors, dailyActivity] = await Promise.all([
+    User.aggregate([
+      {
+        $facet: {
+          viewPatterns: [
+            { $unwind: '$viewHistory' },
+            { $match: { 'viewHistory.viewedAt': { $gte: periods.weekAgo } } },
+            {
+              $group: {
+                _id: {
+                  hour: { $hour: '$viewHistory.viewedAt' },
+                  dayOfWeek: { $dayOfWeek: '$viewHistory.viewedAt' }
+                },
+                count: { $sum: 1 }
+              }
+            },
+            { $sort: { count: -1 } }
+          ],
+          searchPatterns: [
+            { $unwind: '$searchHistory' },
+            { $match: { 'searchHistory.searchedAt': { $gte: periods.weekAgo } } },
+            {
+              $group: {
+                _id: '$searchHistory.query',
+                count: { $sum: 1 }
+              }
+            },
+            { $sort: { count: -1 } },
+            { $limit: 20 }
+          ],
+          cartPatterns: [
+            { $unwind: '$interactions.cartAdditions' },
+            { $match: { 'interactions.cartAdditions.timestamp': { $gte: periods.weekAgo } } },
+            {
+              $group: {
+                _id: '$_id',
+                cartAdditions: { $sum: 1 },
+                cartRemovals: {
+                  $sum: {
+                    $cond: ['$interactions.cartAdditions.removed', 1, 0]
+                  }
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                avgAdditions: { $avg: '$cartAdditions' },
+                avgRemovals: { $avg: '$cartRemovals' },
+                totalUsers: { $sum: 1 }
+              }
+            }
+          ]
+        }
+      }
+    ]),
+    // Get daily activity aggregated by date for last 30 days
+    getDailyActivity(thirtyDaysAgo)
+  ]);
+
+  return {
+    ...behaviors[0],
+    dailyActivity
+  };
+}
+
+// New function to get daily activity data
+async function getDailyActivity(startDate) {
+  try {
+    const activities = await User.aggregate([
+      {
+        $facet: {
+          views: [
+            { $unwind: '$viewHistory' },
+            { $match: { 'viewHistory.viewedAt': { $gte: startDate } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$viewHistory.viewedAt' }
+                },
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          searches: [
+            { $unwind: '$searchHistory' },
+            { $match: { 'searchHistory.searchedAt': { $gte: startDate } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$searchHistory.searchedAt' }
+                },
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          cartAdds: [
+            { $unwind: '$interactions.cartAdditions' },
+            { $match: { 'interactions.cartAdditions.timestamp': { $gte: startDate } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$interactions.cartAdditions.timestamp' }
+                },
+                count: { $sum: 1 }
+              }
+            }
+          ]
+        }
+      }
+    ]);
+
+    // Get purchase data
+    const purchases = await Order.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Merge all activity data by date
+    const dailyMap = new Map();
+    
+    // Initialize all days with 0
+    for (let d = new Date(startDate); d <= new Date(); d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      dailyMap.set(dateStr, {
+        date: dateStr,
+        views: 0,
+        searches: 0,
+        cartAdds: 0,
+        purchases: 0
+      });
+    }
+
+    // Populate with actual data
+    activities[0].views.forEach(item => {
+      if (dailyMap.has(item._id)) {
+        dailyMap.get(item._id).views = item.count;
+      }
+    });
+
+    activities[0].searches.forEach(item => {
+      if (dailyMap.has(item._id)) {
+        dailyMap.get(item._id).searches = item.count;
+      }
+    });
+
+    activities[0].cartAdds.forEach(item => {
+      if (dailyMap.has(item._id)) {
+        dailyMap.get(item._id).cartAdds = item.count;
+      }
+    });
+
+    purchases.forEach(item => {
+      if (dailyMap.has(item._id)) {
+        dailyMap.get(item._id).purchases = item.count;
+      }
+    });
+
+    // Convert to array and sort by date
+    return Array.from(dailyMap.values()).sort((a, b) => 
+      new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+  } catch (error) {
+    console.error('Error getting daily activity:', error);
+    return [];
+  }
+}
+
+// New function to get wishlist metrics
+async function getWishlistMetrics(periods) {
+  try {
+    const [totalWishlist, monthlyAdds, topWishlisted] = await Promise.all([
+      // Total wishlist items across all users
+      User.aggregate([
+        { $unwind: '$interactions.wishlist' },
+        { $count: 'total' }
+      ]),
+      // Wishlist additions in the last month
+      User.aggregate([
+        { $unwind: '$interactions.wishlist' },
+        { $match: { 'interactions.wishlist.addedAt': { $gte: periods.monthAgo } } },
+        { $count: 'total' }
+      ]),
+      // Top wishlisted products
+      User.aggregate([
+        { $unwind: '$interactions.wishlist' },
+        {
+          $group: {
+            _id: '$interactions.wishlist.product',
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { count: -1 } },
+        { $limit: 10 },
+        {
+          $lookup: {
+            from: 'products',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'productInfo'
+          }
+        },
+        { $unwind: '$productInfo' },
+        {
+          $project: {
+            _id: 1,
+            name: '$productInfo.name',
+            category: '$productInfo.category',
+            wishlistCount: '$count'
+          }
+        }
+      ])
+    ]);
+
+    return {
+      totalWishlistItems: totalWishlist[0]?.total || 0,
+      monthlyWishlistAdds: monthlyAdds[0]?.total || 0,
+      topWishlistedProducts: topWishlisted || []
+    };
+  } catch (error) {
+    console.error('Error getting wishlist metrics:', error);
+    return {
+      totalWishlistItems: 0,
+      monthlyWishlistAdds: 0,
+      topWishlistedProducts: []
+    };
+  }
+}
+
+async function getRevenueMetrics(periods) {
+  const revenue = await Order.aggregate([
+    {
+      $facet: {
+        daily: [
+          { $match: { createdAt: { $gte: periods.today } } },
+          {
+            $group: {
+              _id: null,
+              revenue: { $sum: '$totalAmount' },
+              orders: { $sum: 1 },
+              avgOrderValue: { $avg: '$totalAmount' }
+            }
+          }
+        ],
+        weekly: [
+          { $match: { createdAt: { $gte: periods.weekAgo } } },
+          {
+            $group: {
+              _id: null,
+              revenue: { $sum: '$totalAmount' },
+              orders: { $sum: 1 },
+              avgOrderValue: { $avg: '$totalAmount' }
+            }
+          }
+        ],
+        monthly: [
+          { $match: { createdAt: { $gte: periods.monthAgo } } },
+          {
+            $group: {
+              _id: null,
+              revenue: { $sum: '$totalAmount' },
+              orders: { $sum: 1 },
+              avgOrderValue: { $avg: '$totalAmount' }
+            }
+          }
+        ],
+        bySource: [
+          { $match: { createdAt: { $gte: periods.weekAgo } } },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'user',
+              foreignField: '_id',
+              as: 'userData'
+            }
+          },
+          { $unwind: '$userData' },
+          {
+            $group: {
+              _id: {
+                $cond: [
+                  { $gt: [{ $size: '$userData.viewHistory' }, 10] },
+                  'returning',
+                  'new'
+                ]
+              },
+              revenue: { $sum: '$totalAmount' },
+              orders: { $sum: 1 }
             }
           }
         ]
       }
     }
   ]);
+
+  return revenue[0];
+}
+
+async function getSystemHealth() {
+  const health = {
+    database: 'healthy',
+    recommendations: 'healthy',
+    tracking: 'healthy',
+    performance: {}
+  };
+
+  try {
+    // Check database response time
+    const start = Date.now();
+    await User.findOne().limit(1);
+    health.performance.dbResponseTime = Date.now() - start;
+
+    // Check recommendation system
+    const recentRecommendations = await User.countDocuments({
+      'viewHistory.source': 'recommendation',
+      'viewHistory.viewedAt': { $gte: new Date(Date.now() - 60 * 60 * 1000) }
+    });
+    
+    health.recommendations = recentRecommendations > 0 ? 'healthy' : 'warning';
+
+    // Check tracking system
+    const recentTracking = await User.countDocuments({
+      'analytics.lastActivityDate': { $gte: new Date(Date.now() - 15 * 60 * 1000) }
+    });
+    
+    health.tracking = recentTracking > 0 ? 'healthy' : 'warning';
+
+    // Overall health
+    health.overall = (health.database === 'healthy' && 
+                     health.recommendations === 'healthy' && 
+                     health.tracking === 'healthy') ? 'healthy' : 'warning';
+
+  } catch (error) {
+    health.overall = 'error';
+    health.error = error.message;
+  }
+
+  return health;
+}
+
+async function getUserSegments() {
+  const segments = await User.aggregate([
+    {
+      $addFields: {
+        segment: {
+          $switch: {
+            branches: [
+              {
+                case: { $gte: ['$analytics.totalSpent', 5000000] },
+                then: 'VIP'
+              },
+              {
+                case: { $gte: ['$analytics.totalOrders', 10] },
+                then: 'Loyal'
+              },
+              {
+                case: { $gte: ['$analytics.totalOrders', 3] },
+                then: 'Regular'
+              },
+              {
+                case: { $gte: ['$analytics.totalOrders', 1] },
+                then: 'Occasional'
+              },
+              {
+                case: { $gte: [{ $size: { $ifNull: ['$viewHistory', []] } }, 5] },
+                then: 'Browser'
+              }
+            ],
+            default: 'New'
+          }
+        }
+      }
+    },
+    {
+      $group: {
+        _id: '$segment',
+        count: { $sum: 1 },
+        avgSpent: { $avg: '$analytics.totalSpent' },
+        avgOrders: { $avg: '$analytics.totalOrders' },
+        users: { $push: { _id: '$_id', name: '$name', email: '$email' } }
+      }
+    },
+    { $sort: { avgSpent: -1 } }
+  ]);
+
+  return segments.map(segment => ({
+    ...segment,
+    users: segment.users.slice(0, 5) // Limit user list for performance
+  }));
+}
+
+async function getUserSegmentCounts() {
+  const segments = await getUserSegments();
+  return segments.reduce((acc, segment) => {
+    acc[segment._id] = segment.count;
+    return acc;
+  }, {});
+}
+
+async function calculateGrowthRate(period) {
+  const now = new Date();
+  let currentStart, previousStart, previousEnd;
+
+  switch (period) {
+    case 'daily':
+      currentStart = new Date(now.setHours(0, 0, 0, 0));
+      previousEnd = new Date(currentStart);
+      previousStart = new Date(previousEnd.setDate(previousEnd.getDate() - 1));
+      break;
+    case 'weekly':
+      currentStart = new Date(now.setDate(now.getDate() - 7));
+      previousEnd = new Date(currentStart);
+      previousStart = new Date(previousEnd.setDate(previousEnd.getDate() - 7));
+      break;
+    case 'monthly':
+      currentStart = new Date(now.setMonth(now.getMonth() - 1));
+      previousEnd = new Date(currentStart);
+      previousStart = new Date(previousEnd.setMonth(previousEnd.getMonth() - 1));
+      break;
+  }
+
+  const [current, previous] = await Promise.all([
+    User.countDocuments({ createdAt: { $gte: currentStart } }),
+    User.countDocuments({ 
+      createdAt: { 
+        $gte: previousStart,
+        $lt: previousEnd
+      }
+    })
+  ]);
+
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return ((current - previous) / previous * 100).toFixed(2);
+}
+
+async function getRecommendationCount() {
+  const count = await User.aggregate([
+    { $unwind: '$viewHistory' },
+    { $match: { 'viewHistory.source': 'recommendation' } },
+    { $count: 'total' }
+  ]);
   
+  return count[0]?.total || 0;
+}
+
+async function getRecommendationConversion() {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  
+  const [views, purchases] = await Promise.all([
+    User.aggregate([
+      { $unwind: '$viewHistory' },
+      { 
+        $match: { 
+          'viewHistory.source': 'recommendation',
+          'viewHistory.viewedAt': { $gte: thirtyDaysAgo }
+        }
+      },
+      { $count: 'total' }
+    ]),
+    Order.aggregate([
+      { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'users',
+          let: { userId: '$user', productId: '$items.product' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$userId'] } } },
+            { $unwind: '$viewHistory' },
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$viewHistory.product', '$productId'] },
+                    { $eq: ['$viewHistory.source', 'recommendation'] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: 'recommendedView'
+        }
+      },
+      { $match: { recommendedView: { $ne: [] } } },
+      { $count: 'total' }
+    ])
+  ]);
+
+  const viewCount = views[0]?.total || 0;
+  const purchaseCount = purchases[0]?.total || 0;
+  
+  return viewCount > 0 ? ((purchaseCount / viewCount) * 100).toFixed(2) : 0;
+}
+
+async function getTopPerformingRecommendations() {
+  const topProducts = await Product.aggregate([
+    {
+      $lookup: {
+        from: 'users',
+        let: { productId: '$_id' },
+        pipeline: [
+          { $unwind: '$viewHistory' },
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$viewHistory.product', '$productId'] },
+                  { $eq: ['$viewHistory.source', 'recommendation'] }
+                ]
+              }
+            }
+          }
+        ],
+        as: 'recommendedViews'
+      }
+    },
+    {
+      $addFields: {
+        recommendationViews: { $size: '$recommendedViews' }
+      }
+    },
+    { $match: { recommendationViews: { $gt: 0 } } },
+    {
+      $project: {
+        name: 1,
+        category: 1,
+        recommendationViews: 1,
+        totalOrders: 1,
+        conversionRate: {
+          $cond: [
+            { $eq: ['$recommendationViews', 0] },
+            0,
+            { $multiply: [{ $divide: ['$totalOrders', '$recommendationViews'] }, 100] }
+          ]
+        }
+      }
+    },
+    { $sort: { conversionRate: -1 } },
+    { $limit: 10 }
+  ]);
+
+  return topProducts;
+}
+
+async function getPersonalizationMetrics(period) {
+  const periodMs = config.analytics.segmentationPeriods[period] || 
+                   config.analytics.segmentationPeriods.weekly;
+  const startDate = new Date(Date.now() - periodMs);
+
+  const metrics = await User.aggregate([
+    {
+      $facet: {
+        personalized: [
+          {
+            $match: {
+              $or: [
+                { 'viewHistory.source': 'content' },
+                { 'viewHistory.source': 'collaborative' }
+              ]
+            }
+          },
+          { $count: 'total' }
+        ],
+        generic: [
+          {
+            $match: {
+              $or: [
+                { 'viewHistory.source': 'trending' },
+                { 'viewHistory.source': 'random' }
+              ]
+            }
+          },
+          { $count: 'total' }
+        ],
+        engagement: [
+          { $unwind: '$viewHistory' },
+          { $match: { 'viewHistory.viewedAt': { $gte: startDate } } },
+          {
+            $group: {
+              _id: '$viewHistory.source',
+              avgDuration: { $avg: '$viewHistory.duration' },
+              count: { $sum: 1 }
+            }
+          }
+        ]
+      }
+    }
+  ]);
+
   return {
-    mostViewed: metrics[0].mostViewed,
-    bestConverting: metrics[0].bestConverting
+    personalized: metrics[0].personalized[0]?.total || 0,
+    generic: metrics[0].generic[0]?.total || 0,
+    engagement: metrics[0].engagement,
+    effectiveness: calculatePersonalizationEffectiveness(metrics[0])
   };
 }
 
-// Clear cache endpoint
-router.post('/clear-cache', adminAuth, async (req, res) => {
-  try {
-    // This would clear any recommendation caches
-    // Implementation depends on your caching strategy
-    
-    res.json({
-      message: 'Cache cleared successfully',
-      timestamp: new Date()
-    });
-  } catch (error) {
-    console.error('Error clearing cache:', error);
-    res.status(500).json({ message: error.message });
+function calculatePersonalizationEffectiveness(metrics) {
+  const personalized = metrics.personalized[0]?.total || 0;
+  const generic = metrics.generic[0]?.total || 0;
+  const total = personalized + generic;
+  
+  if (total === 0) return 0;
+  
+  const personalizedEngagement = metrics.engagement.find(e => 
+    ['content', 'collaborative'].includes(e._id)
+  );
+  const genericEngagement = metrics.engagement.find(e => 
+    ['trending', 'random'].includes(e._id)
+  );
+  
+  const personalizedScore = personalizedEngagement?.avgDuration || 0;
+  const genericScore = genericEngagement?.avgDuration || 0;
+  
+  if (genericScore === 0) return 100;
+  return ((personalizedScore / genericScore - 1) * 100).toFixed(2);
+}
+
+async function advancedChurnPrediction(options) {
+  const query = {};
+  
+  if (options.segmentSize !== 'all') {
+    // Add segment filtering logic
   }
-});
+
+  const users = await User.find(query)
+    .select('name email analytics interactions viewHistory searchHistory')
+    .lean();
+
+  const predictions = await Promise.all(
+    users.map(user => predictUserChurnAdvanced(user, options))
+  );
+
+  // Filter by risk level if specified
+  let filtered = predictions;
+  if (options.riskLevel !== 'all') {
+    filtered = predictions.filter(p => 
+      p.riskLevel.toLowerCase() === options.riskLevel.toLowerCase()
+    );
+  }
+
+  return filtered.sort((a, b) => b.riskScore - a.riskScore);
+}
+
+async function predictUserChurnAdvanced(user, options) {
+  const factors = [];
+  let totalScore = 0;
+
+  // Advanced scoring algorithm
+  const scores = {
+    lastActivity: calculateActivityScore(user),
+    purchasePattern: await calculatePurchasePatternScore(user._id),
+    engagement: calculateEngagementScore(user),
+    cartBehavior: calculateCartBehaviorScore(user),
+    searchBehavior: calculateSearchBehaviorScore(user)
+  };
+
+  // Apply weights
+  for (const [factor, score] of Object.entries(scores)) {
+    const weight = config.churnRisk.weights[factor] || 0.1;
+    const weightedScore = score * weight;
+    totalScore += weightedScore;
+    
+    factors.push({
+      factor: factor,
+      score: score,
+      weight: weight,
+      weightedScore: weightedScore
+    });
+  }
+
+  const riskLevel = 
+    totalScore >= config.churnRisk.thresholds.high ? 'High' :
+    totalScore >= config.churnRisk.thresholds.medium ? 'Medium' : 'Low';
+
+  const result = {
+    userId: user._id,
+    name: user.name,
+    email: user.email,
+    riskScore: Math.min(100, Math.round(totalScore)),
+    riskLevel,
+    factors,
+    lastActivity: user.analytics?.lastActivityDate || user.analytics?.lastLoginDate
+  };
+
+  if (options.includeRecommendations) {
+    result.recommendations = generateRetentionRecommendations(factors, riskLevel);
+  }
+
+  return result;
+}
+
+function calculateActivityScore(user) {
+  const lastActivity = user.analytics?.lastActivityDate || 
+                       user.analytics?.lastLoginDate;
+  
+  if (!lastActivity) return 100;
+  
+  const daysSince = (Date.now() - new Date(lastActivity).getTime()) / 
+                    (1000 * 60 * 60 * 24);
+  
+  if (daysSince > 60) return 100;
+  if (daysSince > 30) return 70;
+  if (daysSince > 14) return 40;
+  if (daysSince > 7) return 20;
+  return 0;
+}
+
+async function calculatePurchasePatternScore(userId) {
+  const orders = await Order.find({ 
+    user: userId,
+    orderStatus: { $ne: 'cancelled' }
+  })
+  .select('createdAt totalAmount')
+  .sort('createdAt')
+  .lean();
+
+  if (orders.length === 0) return 80;
+  if (orders.length === 1) return 60;
+
+  // Calculate purchase frequency trend
+  const intervals = [];
+  for (let i = 1; i < orders.length; i++) {
+    const days = (new Date(orders[i].createdAt) - new Date(orders[i-1].createdAt)) / 
+                 (1000 * 60 * 60 * 24);
+    intervals.push(days);
+  }
+
+  const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+  const lastOrderDays = (Date.now() - new Date(orders[orders.length - 1].createdAt)) / 
+                        (1000 * 60 * 60 * 24);
+
+  if (lastOrderDays > avgInterval * 3) return 80;
+  if (lastOrderDays > avgInterval * 2) return 50;
+  if (lastOrderDays > avgInterval * 1.5) return 30;
+  return 10;
+}
+
+function calculateEngagementScore(user) {
+  const viewCount = user.viewHistory?.length || 0;
+  const searchCount = user.searchHistory?.length || 0;
+  const wishlistCount = user.interactions?.wishlist?.length || 0;
+
+  const recentViews = user.viewHistory?.filter(v => 
+    new Date(v.viewedAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+  ).length || 0;
+
+  if (viewCount === 0 && searchCount === 0) return 90;
+  if (recentViews === 0 && viewCount > 10) return 70;
+  if (recentViews < 3) return 40;
+  
+  const engagementScore = Math.max(0, 100 - (
+    (viewCount * 0.5) + 
+    (searchCount * 0.3) + 
+    (wishlistCount * 2) + 
+    (recentViews * 5)
+  ));
+  
+  return Math.min(100, engagementScore);
+}
+
+function calculateCartBehaviorScore(user) {
+  const cartAdditions = user.interactions?.cartAdditions || [];
+  const recentCarts = cartAdditions.filter(item => 
+    new Date(item.timestamp) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  );
+  
+  const abandonmentRate = recentCarts.filter(item => item.removed).length / 
+                          (recentCarts.length || 1);
+  
+  if (abandonmentRate > 0.8) return 80;
+  if (abandonmentRate > 0.6) return 60;
+  if (abandonmentRate > 0.4) return 40;
+  return 20;
+}
+
+function calculateSearchBehaviorScore(user) {
+  const searches = user.searchHistory || [];
+  const recentSearches = searches.filter(s => 
+    new Date(s.searchedAt) > new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+  );
+  
+  if (searches.length > 20 && recentSearches.length === 0) return 60;
+  if (searches.length > 10 && recentSearches.length < 2) return 40;
+  return 20;
+}
+
+function generateRetentionRecommendations(factors, riskLevel) {
+  const recommendations = [];
+  
+  if (riskLevel === 'High') {
+    recommendations.push({
+      action: 'immediate_engagement',
+      priority: 'critical',
+      tactics: [
+        'Gửi email cá nhân hóa với ưu đãi đặc biệt',
+        'Liên hệ trực tiếp qua điện thoại',
+        'Tạo mã giảm giá độc quyền 20-30%'
+      ]
+    });
+  }
+  
+  factors.forEach(factor => {
+    if (factor.score > 60) {
+      switch (factor.factor) {
+        case 'lastActivity':
+          recommendations.push({
+            action: 'reactivation_campaign',
+            priority: 'high',
+            tactics: [
+              'Email "Chúng tôi nhớ bạn" với sản phẩm mới',
+              'Push notification về ưu đãi thời gian giới hạn',
+              'SMS nhắc nhở với link trực tiếp'
+            ]
+          });
+          break;
+        case 'purchasePattern':
+          recommendations.push({
+            action: 'purchase_incentive',
+            priority: 'high',
+            tactics: [
+              'Gợi ý sản phẩm bổ sung cho đơn hàng trước',
+              'Chương trình điểm thưởng x2',
+              'Free shipping cho đơn hàng tiếp theo'
+            ]
+          });
+          break;
+        case 'cartBehavior':
+          recommendations.push({
+            action: 'cart_recovery',
+            priority: 'medium',
+            tactics: [
+              'Email nhắc nhở giỏ hàng sau 2 giờ',
+              'Giảm giá 10% cho sản phẩm trong giỏ',
+              'Chat support chủ động'
+            ]
+          });
+          break;
+      }
+    }
+  });
+  
+  return recommendations;
+}
+
+async function getAlgorithmPerformance(days) {
+  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  
+  const performance = await User.aggregate([
+    { $unwind: '$viewHistory' },
+    { $match: { 'viewHistory.viewedAt': { $gte: startDate } } },
+    {
+      $group: {
+        _id: '$viewHistory.source',
+        totalViews: { $sum: 1 },
+        avgDuration: { $avg: '$viewHistory.duration' },
+        uniqueUsers: { $addToSet: '$_id' }
+      }
+    },
+    {
+      $lookup: {
+        from: 'orders',
+        let: { source: '$_id' },
+        pipeline: [
+          { $match: { createdAt: { $gte: startDate } } },
+          { $unwind: '$items' },
+          {
+            $lookup: {
+              from: 'users',
+              let: { userId: '$user', productId: '$items.product' },
+              pipeline: [
+                { $match: { $expr: { $eq: ['$_id', '$userId'] } } },
+                { $unwind: '$viewHistory' },
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $eq: ['$viewHistory.product', '$productId'] },
+                        { $eq: ['$viewHistory.source', '$source'] }
+                      ]
+                    }
+                  }
+                }
+              ],
+              as: 'matchedView'
+            }
+          },
+          { $match: { matchedView: { $ne: [] } } },
+          { $count: 'conversions' }
+        ],
+        as: 'conversionData'
+      }
+    },
+    {
+      $project: {
+        algorithm: '$_id',
+        totalViews: 1,
+        avgDuration: { $round: ['$avgDuration', 2] },
+        uniqueUsers: { $size: '$uniqueUsers' },
+        conversions: { $ifNull: [{ $arrayElemAt: ['$conversionData.conversions', 0] }, 0] },
+        conversionRate: {
+          $multiply: [
+            {
+              $divide: [
+                { $ifNull: [{ $arrayElemAt: ['$conversionData.conversions', 0] }, 0] },
+                '$totalViews'
+              ]
+            },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { conversionRate: -1 } }
+  ]);
+  
+  return performance;
+}
+
+async function getABTestResults() {
+  // Simulated A/B test results - in production, this would query actual test data
+  return {
+    tests: [
+      {
+        id: 'test_001',
+        name: 'Collaborative vs Content-Based',
+        status: 'completed',
+        startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        endDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        variants: [
+          {
+            name: 'Collaborative',
+            users: 500,
+            conversions: 45,
+            conversionRate: 9.0,
+            avgOrderValue: 450000
+          },
+          {
+            name: 'Content-Based',
+            users: 500,
+            conversions: 52,
+            conversionRate: 10.4,
+            avgOrderValue: 480000
+          }
+        ],
+        winner: 'Content-Based',
+        confidence: 95.2
+      }
+    ]
+  };
+}
+
+async function analyzeUserJourney(userId) {
+  const user = await User.findById(userId).lean();
+  
+  if (!user) {
+    throw new Error('User not found');
+  }
+  
+  const orders = await Order.find({ user: userId })
+    .populate('items.product')
+    .sort('createdAt')
+    .lean();
+  
+  // Create timeline of events
+  const timeline = [];
+  
+  // Add registration
+  timeline.push({
+    type: 'registration',
+    date: user.createdAt || user.analytics?.registrationDate,
+    details: {}
+  });
+  
+  // Add view events
+  if (user.viewHistory) {
+    user.viewHistory.forEach(view => {
+      timeline.push({
+        type: 'view',
+        date: view.viewedAt,
+        details: {
+          productId: view.product,
+          duration: view.duration,
+          source: view.source
+        }
+      });
+    });
+  }
+  
+  // Add search events
+  if (user.searchHistory) {
+    user.searchHistory.forEach(search => {
+      timeline.push({
+        type: 'search',
+        date: search.searchedAt,
+        details: {
+          query: search.query,
+          resultsCount: search.resultsCount
+        }
+      });
+    });
+  }
+  
+  // Add cart events
+  if (user.interactions?.cartAdditions) {
+    user.interactions.cartAdditions.forEach(cart => {
+      timeline.push({
+        type: cart.removed ? 'cart_remove' : 'cart_add',
+        date: cart.timestamp,
+        details: {
+          productId: cart.product,
+          quantity: cart.quantity
+        }
+      });
+    });
+  }
+  
+  // Add wishlist events
+  if (user.interactions?.wishlist) {
+    user.interactions.wishlist.forEach(item => {
+      timeline.push({
+        type: 'wishlist',
+        date: item.addedAt,
+        details: {
+          productId: item.product
+        }
+      });
+    });
+  }
+  
+  // Add order events
+  orders.forEach(order => {
+    timeline.push({
+      type: 'purchase',
+      date: order.createdAt,
+      details: {
+        orderId: order._id,
+        totalAmount: order.totalAmount,
+        items: order.items.length
+      }
+    });
+  });
+  
+  // Sort timeline by date
+  timeline.sort((a, b) => new Date(a.date) - new Date(b.date));
+  
+  // Calculate journey metrics
+  const metrics = {
+    totalEvents: timeline.length,
+    timeToFirstPurchase: calculateTimeToFirstPurchase(timeline),
+    averageTimeBetweenPurchases: calculateAvgTimeBetweenPurchases(timeline),
+    mostViewedCategory: await getMostViewedCategory(user.viewHistory),
+    purchaseFunnel: calculatePurchaseFunnel(timeline),
+    customerLifetimeValue: user.analytics?.totalSpent || 0
+  };
+  
+  return {
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      registrationDate: user.createdAt || user.analytics?.registrationDate
+    },
+    timeline: timeline.slice(-100), // Limit to last 100 events
+    metrics,
+    segment: determineUserSegment(user, orders)
+  };
+}
+
+function calculateTimeToFirstPurchase(timeline) {
+  const registration = timeline.find(e => e.type === 'registration');
+  const firstPurchase = timeline.find(e => e.type === 'purchase');
+  
+  if (!registration || !firstPurchase) return null;
+  
+  const days = (new Date(firstPurchase.date) - new Date(registration.date)) / 
+               (1000 * 60 * 60 * 24);
+  
+  return Math.round(days);
+}
+
+function calculateAvgTimeBetweenPurchases(timeline) {
+  const purchases = timeline.filter(e => e.type === 'purchase');
+  
+  if (purchases.length < 2) return null;
+  
+  const intervals = [];
+  for (let i = 1; i < purchases.length; i++) {
+    const days = (new Date(purchases[i].date) - new Date(purchases[i-1].date)) / 
+                 (1000 * 60 * 60 * 24);
+    intervals.push(days);
+  }
+  
+  return Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length);
+}
+
+async function getMostViewedCategory(viewHistory) {
+  if (!viewHistory || viewHistory.length === 0) return null;
+  
+  const productIds = viewHistory.map(v => v.product).filter(Boolean);
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select('category')
+    .lean();
+  
+  const categories = {};
+  products.forEach(p => {
+    if (p.category) {
+      categories[p.category] = (categories[p.category] || 0) + 1;
+    }
+  });
+  
+  const sorted = Object.entries(categories).sort((a, b) => b[1] - a[1]);
+  return sorted[0]?.[0] || null;
+}
+
+function calculatePurchaseFunnel(timeline) {
+  const funnel = {
+    views: timeline.filter(e => e.type === 'view').length,
+    searches: timeline.filter(e => e.type === 'search').length,
+    cartAdds: timeline.filter(e => e.type === 'cart_add').length,
+    purchases: timeline.filter(e => e.type === 'purchase').length
+  };
+  
+  funnel.viewToCart = funnel.views > 0 ? 
+    ((funnel.cartAdds / funnel.views) * 100).toFixed(2) : 0;
+  funnel.cartToPurchase = funnel.cartAdds > 0 ? 
+    ((funnel.purchases / funnel.cartAdds) * 100).toFixed(2) : 0;
+  funnel.overallConversion = funnel.views > 0 ? 
+    ((funnel.purchases / funnel.views) * 100).toFixed(2) : 0;
+  
+  return funnel;
+}
+
+function determineUserSegment(user, orders) {
+  const totalSpent = user.analytics?.totalSpent || 0;
+  const orderCount = orders.length;
+  const lastOrderDays = orders.length > 0 ? 
+    (Date.now() - new Date(orders[orders.length - 1].createdAt)) / (1000 * 60 * 60 * 24) : 
+    999;
+  
+  if (totalSpent > 10000000 && orderCount > 20) return 'Champion';
+  if (totalSpent > 5000000 && orderCount > 10) return 'Loyal Customer';
+  if (orderCount > 5 && lastOrderDays < 30) return 'Potential Loyalist';
+  if (orderCount === 1 && lastOrderDays < 30) return 'New Customer';
+  if (orderCount > 3 && lastOrderDays > 90) return 'At Risk';
+  if (orderCount > 0 && lastOrderDays > 180) return 'Lost';
+  
+  return 'Prospect';
+}
+
+async function exportAnalytics(type, options) {
+  const { startDate, endDate } = options;
+  const dateFilter = {};
+  
+  if (startDate) dateFilter.$gte = new Date(startDate);
+  if (endDate) dateFilter.$lte = new Date(endDate);
+  
+  switch (type) {
+    case 'users':
+      return await exportUserAnalytics(dateFilter);
+    case 'products':
+      return await exportProductAnalytics(dateFilter);
+    case 'recommendations':
+      return await exportRecommendationAnalytics(dateFilter);
+    case 'revenue':
+      return await exportRevenueAnalytics(dateFilter);
+    case 'churn':
+      return await exportChurnAnalytics(dateFilter);
+    default:
+      throw new Error('Invalid export type');
+  }
+}
+
+async function exportUserAnalytics(dateFilter) {
+  const users = await User.find(
+    dateFilter.$gte || dateFilter.$lte ? 
+    { createdAt: dateFilter } : {}
+  )
+  .select('name email analytics viewHistory searchHistory interactions createdAt')
+  .lean();
+  
+  return users.map(user => ({
+    name: user.name,
+    email: user.email,
+    registrationDate: user.createdAt,
+    totalSpent: user.analytics?.totalSpent || 0,
+    totalOrders: user.analytics?.totalOrders || 0,
+    viewCount: user.viewHistory?.length || 0,
+    searchCount: user.searchHistory?.length || 0,
+    wishlistCount: user.interactions?.wishlist?.length || 0,
+    lastActivity: user.analytics?.lastActivityDate || user.analytics?.lastLoginDate
+  }));
+}
+
+async function exportProductAnalytics(dateFilter) {
+  const products = await Product.find({})
+    .select('name category brand price viewCount totalOrders rating createdAt')
+    .lean();
+  
+  return products.map(product => ({
+    name: product.name,
+    category: product.category,
+    brand: product.brand,
+    price: product.price,
+    viewCount: product.viewCount || 0,
+    totalOrders: product.totalOrders || 0,
+    conversionRate: product.viewCount > 0 ? 
+      ((product.totalOrders / product.viewCount) * 100).toFixed(2) : 0,
+    rating: product.rating || 0,
+    createdAt: product.createdAt
+  }));
+}
+
+async function exportRecommendationAnalytics(dateFilter) {
+  const recommendations = await User.aggregate([
+    { $unwind: '$viewHistory' },
+    {
+      $match: {
+        'viewHistory.source': { $exists: true },
+        'viewHistory.viewedAt': dateFilter
+      }
+    },
+    {
+      $group: {
+        _id: {
+          source: '$viewHistory.source',
+          date: { $dateToString: { format: '%Y-%m-%d', date: '$viewHistory.viewedAt' } }
+        },
+        views: { $sum: 1 },
+        avgDuration: { $avg: '$viewHistory.duration' },
+        uniqueUsers: { $addToSet: '$_id' }
+      }
+    },
+    {
+      $project: {
+        date: '$_id.date',
+        algorithm: '$_id.source',
+        views: 1,
+        avgDuration: { $round: ['$avgDuration', 2] },
+        uniqueUsers: { $size: '$uniqueUsers' }
+      }
+    },
+    { $sort: { date: -1, algorithm: 1 } }
+  ]);
+  
+  return recommendations;
+}
+
+async function exportRevenueAnalytics(dateFilter) {
+  const revenue = await Order.aggregate([
+    { $match: { createdAt: dateFilter } },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+        orders: { $sum: 1 },
+        revenue: { $sum: '$totalAmount' },
+        avgOrderValue: { $avg: '$totalAmount' },
+        uniqueCustomers: { $addToSet: '$user' }
+      }
+    },
+    {
+      $project: {
+        date: '$_id',
+        orders: 1,
+        revenue: 1,
+        avgOrderValue: { $round: ['$avgOrderValue', 0] },
+        uniqueCustomers: { $size: '$uniqueCustomers' }
+      }
+    },
+    { $sort: { date: -1 } }
+  ]);
+  
+  return revenue;
+}
+
+async function exportChurnAnalytics(dateFilter) {
+  const options = {
+    includeRecommendations: false,
+    segmentSize: 'all',
+    riskLevel: 'all'
+  };
+  
+  const predictions = await advancedChurnPrediction(options);
+  
+  return predictions.map(p => ({
+    name: p.name,
+    email: p.email,
+    riskScore: p.riskScore,
+    riskLevel: p.riskLevel,
+    lastActivity: p.lastActivity,
+    topFactor: p.factors[0]?.factor || 'N/A',
+    topFactorScore: p.factors[0]?.score || 0
+  }));
+}
+
+function convertToCSV(data) {
+  if (!data || data.length === 0) return '';
+  
+  const headers = Object.keys(data[0]);
+  const csvHeaders = headers.join(',');
+  
+  const csvRows = data.map(row => {
+    return headers.map(header => {
+      const value = row[header];
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'object') return JSON.stringify(value);
+      if (typeof value === 'string' && value.includes(',')) return `"${value}"`;
+      return value;
+    }).join(',');
+  });
+  
+  return [csvHeaders, ...csvRows].join('\n');
+}
+
+function getEmptyDashboard() {
+  return {
+    userMetrics: {
+      total: 0,
+      new: 0,
+      active: 0,
+      churned: 0,
+      activeRate: '0',
+      churnRate: '0',
+      segments: {},
+      growth: { daily: 0, weekly: 0, monthly: 0 }
+    },
+    productMetrics: {
+      topViewed: [],
+      topConverting: [],
+      categoryPerformance: []
+    },
+    behaviorMetrics: {
+      viewPatterns: [],
+      searchPatterns: [],
+      cartPatterns: [],
+      dailyActivity: []
+    },
+    revenueMetrics: {
+      daily: [],
+      weekly: [],
+      monthly: [],
+      bySource: []
+    },
+    systemHealth: {
+      overall: 'unknown',
+      database: 'unknown',
+      recommendations: 'unknown',
+      tracking: 'unknown'
+    },
+    recommendations: {
+      totalGenerated: 0,
+      conversionRate: 0,
+      topPerformers: []
+    },
+    wishlistMetrics: {
+      totalWishlistItems: 0,
+      monthlyWishlistAdds: 0,
+      topWishlistedProducts: []
+    }
+  };
+}
+
+// Cleanup old cache periodically
+setInterval(() => {
+  analyticsCache.invalidate();
+}, config.analytics.refreshInterval);
 
 module.exports = router;
