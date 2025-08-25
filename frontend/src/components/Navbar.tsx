@@ -1,4 +1,4 @@
-// src/components/Navbar.tsx - Fixed unread messages count
+// src/components/Navbar.tsx - Optimized and styled
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
@@ -11,7 +11,8 @@ import {
   ClockIcon,
   Bars3Icon,
   XMarkIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  ChevronDownIcon
 } from '@heroicons/react/24/outline';
 
 import { useAuth } from '../context/AuthContext';
@@ -21,9 +22,11 @@ const Navbar: React.FC = () => {
   const { user, logout } = useAuth();
   const { totalItems } = useCart();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const navigate = useNavigate();
 
+  // Socket connection and unread count logic (unchanged)
   useEffect(() => {
     if (!user) {
       setUnreadCount(0);
@@ -31,31 +34,23 @@ const Navbar: React.FC = () => {
     }
 
     let socket: any = null;
-
-    // Initial fetch of unread count
     fetchUnreadCount();
 
-    // Setup socket connection
     socket = io('http://localhost:5000');
     
     socket.on('connect', () => {
       console.log('Navbar connected to socket');
       socket.emit('joinChat', user._id);
-      
-      // Join user-specific room
       socket.emit('join', `user-${user._id}`);
       
-      // If admin, join admin room
       if (user.email === 'admin@gmail.com') {
         socket.emit('joinAdminRoom');
       }
     });
 
-    // Listen for new messages
     socket.on('newMessage', (message: any) => {
       console.log('New message received:', message);
       
-      // For regular users: count if message is from admin and user is the receiver
       if (user.email !== 'admin@gmail.com') {
         if (message.receiver._id === user._id && message.senderRole === 'admin' && message.status !== 'read') {
           setUnreadCount(prev => prev + 1);
@@ -63,16 +58,14 @@ const Navbar: React.FC = () => {
       }
     });
 
-    // For admin: listen to new client messages
     socket.on('newClientMessage', ({ message, conversationId }: any) => {
       console.log('New client message for admin:', message);
       
       if (user.email === 'admin@gmail.com' && message.status !== 'read') {
-        fetchUnreadCount(); // Refetch total unread for admin
+        fetchUnreadCount();
       }
     });
 
-    // Listen for messages marked as read
     socket.on('messagesMarkedAsRead', ({ conversationId, count }: any) => {
       console.log('Messages marked as read:', count);
       fetchUnreadCount();
@@ -85,7 +78,6 @@ const Navbar: React.FC = () => {
       }
     });
 
-    // Cleanup
     return () => {
       if (socket) {
         socket.disconnect();
@@ -98,7 +90,6 @@ const Navbar: React.FC = () => {
 
     try {
       if (user.email === 'admin@gmail.com') {
-        // For admin: get total unread from all conversations
         const response = await axios.get('/chat/conversations');
         const totalUnread = response.data.reduce((sum: number, conv: any) => {
           return sum + (conv.unreadCount || 0);
@@ -106,14 +97,9 @@ const Navbar: React.FC = () => {
         console.log('Admin total unread:', totalUnread);
         setUnreadCount(totalUnread);
       } else {
-        // For client: count unread messages from admin
         const response = await axios.get('/chat/messages');
         const messages = response.data.messages || [];
         
-        // Count messages where:
-        // 1. User is the receiver
-        // 2. Message is from admin
-        // 3. Status is not 'read'
         const unreadMessages = messages.filter((msg: any) => 
           msg.receiver._id === user._id && 
           msg.senderRole === 'admin' && 
@@ -131,93 +117,144 @@ const Navbar: React.FC = () => {
 
   const handleChatClick = () => {
     navigate('/chat');
-    // Don't reset count here, let the chat component handle marking as read
+    setMobileMenuOpen(false);
   };
 
-  // Reset count when user logs out
-  useEffect(() => {
-    if (!user) {
-      setUnreadCount(0);
-    }
-  }, [user]);
+  const handleLogout = () => {
+    logout();
+    setUserDropdownOpen(false);
+    setMobileMenuOpen(false);
+  };
+
+  // Badge component for notifications
+  const NotificationBadge = ({ count, className = "", animate = false }: { count: number; className?: string; animate?: boolean }) => (
+    count > 0 ? (
+      <span className={`absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-medium ${animate ? 'animate-pulse' : ''} ${className}`}>
+        {count > 9 ? '9+' : count}
+      </span>
+    ) : null
+  );
+
+  // Navigation link component
+  const NavLink = ({ to, children, onClick, className = "" }: { to?: string, children: React.ReactNode, onClick?: () => void, className?: string }) => (
+    to ? (
+      <Link 
+        to={to} 
+        className={`text-gray-600 hover:text-blue-600 transition-colors duration-200 font-medium ${className}`}
+        onClick={onClick}
+      >
+        {children}
+      </Link>
+    ) : (
+      <button 
+        onClick={onClick}
+        className={`text-gray-600 hover:text-blue-600 transition-colors duration-200 font-medium ${className}`}
+      >
+        {children}
+      </button>
+    )
+  );
 
   return (
-    <nav className="bg-white shadow-md sticky top-0 z-40">
-      <div className="container mx-auto px-4">
+    <nav className="bg-white shadow-lg sticky top-0 z-50 border-b border-gray-200">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          <Link to="/" className="text-2xl font-bold text-gray-800">
+          {/* Logo */}
+          <Link 
+            to="/" 
+            className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-all duration-200"
+          >
             Fashion Shop
           </Link>
 
           {/* Desktop Menu */}
-          <div className="hidden md:flex items-center space-x-6">
-            <Link to="/" className="text-gray-600 hover:text-gray-800">
-              Trang chủ
-            </Link>
+          <div className="hidden lg:flex items-center space-x-8">
+            <NavLink to="/">Trang chủ</NavLink>
             
             {user && (
               <>
-                <Link to="/wishlist" className="text-gray-600 hover:text-gray-800 flex items-center">
-                  <HeartIcon className="h-5 w-5 mr-1" />
-                  Yêu thích
-                </Link>
-                <Link to="/view-history" className="text-gray-600 hover:text-gray-800 flex items-center">
-                  <ClockIcon className="h-5 w-5 mr-1" />
-                  Đã xem
-                </Link>
-                <button
-                  onClick={handleChatClick}
-                  className="text-gray-600 hover:text-gray-800 flex items-center relative"
-                >
-                  <ChatBubbleLeftRightIcon className="h-5 w-5 mr-1" />
-                  Chat
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs animate-pulse">
-                      {unreadCount > 9 ? '9+' : unreadCount}
-                    </span>
-                  )}
-                </button>
+                <NavLink to="/wishlist" className="flex items-center space-x-1">
+                  <HeartIcon className="h-5 w-5" />
+                  <span>Yêu thích</span>
+                </NavLink>
+                
+                <NavLink to="/view-history" className="flex items-center space-x-1">
+                  <ClockIcon className="h-5 w-5" />
+                  <span>Đã xem</span>
+                </NavLink>
+                
+                <NavLink onClick={handleChatClick} className="flex items-center space-x-1 relative">
+                  <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                  <span>Chat</span>
+                  <NotificationBadge count={unreadCount} animate />
+                </NavLink>
+                
+                <NavLink to="/orders">Đơn hàng</NavLink>
               </>
             )}
 
-            <Link to="/cart" className="relative">
-              <ShoppingCartIcon className="h-6 w-6 text-gray-600" />
-              {totalItems > 0 && (
-                <span className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                  {totalItems}
-                </span>
-              )}
+            {/* Cart */}
+            <Link to="/cart" className="relative p-2 text-gray-600 hover:text-blue-600 transition-colors duration-200">
+              <ShoppingCartIcon className="h-6 w-6" />
+              <NotificationBadge count={totalItems} className="bg-red-500" />
             </Link>
 
+            {/* User Menu */}
             {user ? (
-              <div className="flex items-center space-x-4">
-                <Link to="/orders" className="text-gray-600 hover:text-gray-800">
-                  Đơn hàng
-                </Link>
-                <div className="relative group">
-                  <button className="flex items-center space-x-1 text-gray-600 hover:text-gray-800">
-                    <UserIcon className="h-5 w-5" />
-                    <span>{user.name}</span>
-                  </button>
-                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-                    <Link to="/profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                      Tài khoản
-                    </Link>
-                    <button
-                      onClick={logout}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      Đăng xuất
-                    </button>
-                  </div>
-                </div>
+              <div className="relative">
+                <button
+                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                  className="flex items-center space-x-2 px-3 py-2 rounded-lg text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-all duration-200 border border-transparent hover:border-blue-200"
+                >
+                  <UserIcon className="h-5 w-5" />
+                  <span className="font-medium">{user.name}</span>
+                  <ChevronDownIcon className={`h-4 w-4 transition-transform duration-200 ${userDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+                
+                {/* Dropdown Menu - with higher z-index */}
+                {userDropdownOpen && (
+                  <>
+                    {/* Overlay to close dropdown */}
+                    <div 
+                      className="fixed inset-0 z-40" 
+                      onClick={() => setUserDropdownOpen(false)}
+                    />
+                    
+                    {/* Dropdown content */}
+                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-gray-200 py-2 z-50 transform opacity-100 scale-100 transition-all duration-200">
+
+                      
+                      <div className="py-2">
+                        <Link
+                          to="/profile"
+                          className="flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
+                          onClick={() => setUserDropdownOpen(false)}
+                        >
+                          <UserIcon className="h-4 w-4 mr-3" />
+                          Quản lý tài khoản
+                        </Link>
+                        
+                        <button
+                          onClick={handleLogout}
+                          className="flex items-center w-full px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors duration-200"
+                        >
+                          <svg className="h-4 w-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                          </svg>
+                          Đăng xuất
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="flex items-center space-x-4">
-                <Link to="/login" className="text-gray-600 hover:text-gray-800">
-                  Đăng nhập
-                </Link>
-                <Link to="/register" className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                <NavLink to="/login">Đăng nhập</NavLink>
+                <Link
+                  to="/register"
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+                >
                   Đăng ký
                 </Link>
               </div>
@@ -227,7 +264,7 @@ const Navbar: React.FC = () => {
           {/* Mobile Menu Button */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden"
+            className="lg:hidden p-2 rounded-lg text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-all duration-200"
           >
             {mobileMenuOpen ? (
               <XMarkIcon className="h-6 w-6" />
@@ -239,62 +276,90 @@ const Navbar: React.FC = () => {
 
         {/* Mobile Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden py-4 border-t">
-            <div className="space-y-2">
-              <Link to="/" className="block py-2 text-gray-600 hover:text-gray-800">
+          <div className="lg:hidden border-t border-gray-200 bg-white">
+            <div className="px-4 py-6 space-y-4">
+              <NavLink to="/" onClick={() => setMobileMenuOpen(false)} className="block py-2">
                 Trang chủ
-              </Link>
+              </NavLink>
               
               {user && (
                 <>
-                  <Link to="/wishlist" className="block py-2 text-gray-600 hover:text-gray-800">
-                    Yêu thích
-                  </Link>
-                  <Link to="/view-history" className="block py-2 text-gray-600 hover:text-gray-800">
-                    Đã xem
-                  </Link>
-                  <button
-                    onClick={handleChatClick}
-                    className="block w-full text-left py-2 text-gray-600 hover:text-gray-800 relative"
-                  >
-                    Chat
-                    {unreadCount > 0 && (
-                      <span className="inline-block ml-2 bg-red-500 text-white rounded-full px-2 py-0.5 text-xs">
-                        {unreadCount}
-                      </span>
-                    )}
-                  </button>
-                  <Link to="/orders" className="block py-2 text-gray-600 hover:text-gray-800">
+                  <NavLink to="/wishlist" onClick={() => setMobileMenuOpen(false)} className="block py-2">
+                    <div className="flex items-center space-x-3">
+                      <HeartIcon className="h-5 w-5" />
+                      <span>Yêu thích</span>
+                    </div>
+                  </NavLink>
+                  
+                  <NavLink to="/view-history" onClick={() => setMobileMenuOpen(false)} className="block py-2">
+                    <div className="flex items-center space-x-3">
+                      <ClockIcon className="h-5 w-5" />
+                      <span>Đã xem</span>
+                    </div>
+                  </NavLink>
+                  
+                  <NavLink onClick={handleChatClick} className="block py-2">
+                    <div className="flex items-center space-x-3 relative">
+                      <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                      <span>Chat</span>
+                      {unreadCount > 0 && (
+                        <span className="bg-red-500 text-white rounded-full px-2 py-0.5 text-xs font-medium">
+                          {unreadCount > 9 ? '9+' : unreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </NavLink>
+                  
+                  <NavLink to="/orders" onClick={() => setMobileMenuOpen(false)} className="block py-2">
                     Đơn hàng
-                  </Link>
+                  </NavLink>
                 </>
               )}
 
-              <Link to="/cart" className="block py-2 text-gray-600 hover:text-gray-800">
-                Giỏ hàng ({totalItems})
-              </Link>
+              <NavLink to="/cart" onClick={() => setMobileMenuOpen(false)} className="block py-2">
+                <div className="flex items-center space-x-3">
+                  <ShoppingCartIcon className="h-5 w-5" />
+                  <span>Giỏ hàng ({totalItems})</span>
+                </div>
+              </NavLink>
 
               {user ? (
-                <>
-                  <Link to="/profile" className="block py-2 text-gray-600 hover:text-gray-800">
-                    Tài khoản ({user.name})
-                  </Link>
+                <div className="border-t border-gray-200 pt-4 mt-4 space-y-4">
+                  <div className="px-2 py-2">
+                    <p className="text-sm font-medium text-gray-900">{user.name}</p>
+                    <p className="text-sm text-gray-500">{user.email}</p>
+                  </div>
+                  
+                  <NavLink to="/profile" onClick={() => setMobileMenuOpen(false)} className="block py-2">
+                    <div className="flex items-center space-x-3">
+                      <UserIcon className="h-5 w-5" />
+                      <span>Quản lý tài khoản</span>
+                    </div>
+                  </NavLink>
+                  
                   <button
-                    onClick={logout}
-                    className="block w-full text-left py-2 text-gray-600 hover:text-gray-800"
+                    onClick={handleLogout}
+                    className="flex items-center space-x-3 w-full text-left py-2 text-red-600 hover:text-red-700 transition-colors duration-200"
                   >
-                    Đăng xuất
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    <span>Đăng xuất</span>
                   </button>
-                </>
+                </div>
               ) : (
-                <>
-                  <Link to="/login" className="block py-2 text-gray-600 hover:text-gray-800">
+                <div className="border-t border-gray-200 pt-4 mt-4 space-y-4">
+                  <NavLink to="/login" onClick={() => setMobileMenuOpen(false)} className="block py-2">
                     Đăng nhập
-                  </Link>
-                  <Link to="/register" className="block py-2 text-gray-600 hover:text-gray-800">
+                  </NavLink>
+                  <Link
+                    to="/register"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 font-medium text-center"
+                  >
                     Đăng ký
                   </Link>
-                </>
+                </div>
               )}
             </div>
           </div>
