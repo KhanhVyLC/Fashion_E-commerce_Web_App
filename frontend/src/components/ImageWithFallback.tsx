@@ -1,5 +1,5 @@
-// src/components/ImageWithFallback.tsx - Component với fallback và skeleton loading
-import React, { useState, useRef, useEffect } from 'react';
+// src/components/ImageWithFallback.tsx - Updated with style prop support
+import React, { useState, useRef, useEffect, CSSProperties } from 'react';
 import { useImagePreloader } from '../hooks/useImagePreloader';
 
 interface ImageWithFallbackProps {
@@ -15,11 +15,13 @@ interface ImageWithFallbackProps {
   onLoad?: () => void;
   onError?: () => void;
   showSkeleton?: boolean;
+  style?: CSSProperties; // Added style prop
+  placeholder?: string; // Added placeholder prop for compatibility
 }
 
 const ImageWithFallback: React.FC<ImageWithFallbackProps> = ({
   src,
-  fallbackSrc = '/placeholder.jpg',
+  fallbackSrc,
   alt,
   className = '',
   skeletonClassName = '',
@@ -29,13 +31,18 @@ const ImageWithFallback: React.FC<ImageWithFallbackProps> = ({
   priority = 'medium',
   onLoad,
   onError,
-  showSkeleton = true
+  showSkeleton = true,
+  style = {},
+  placeholder = '/placeholder.jpg'
 }) => {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(src);
   const imgRef = useRef<HTMLImageElement>(null);
   const { isImagePreloaded, preloadImage } = useImagePreloader();
+  
+  // Use placeholder as fallback if fallbackSrc not provided
+  const finalFallbackSrc = fallbackSrc || placeholder;
 
   // Check if image is already preloaded
   useEffect(() => {
@@ -53,13 +60,19 @@ const ImageWithFallback: React.FC<ImageWithFallbackProps> = ({
   };
 
   const handleError = () => {
-    if (currentSrc !== fallbackSrc) {
-      setCurrentSrc(fallbackSrc);
+    if (currentSrc !== finalFallbackSrc) {
+      setCurrentSrc(finalFallbackSrc);
       setImageError(false); // Reset error state for fallback
     } else {
       setImageError(true);
       onError?.();
     }
+  };
+
+  // Combine aspect ratio style with passed style prop
+  const imageStyle: CSSProperties = {
+    aspectRatio: width && height ? `${width}/${height}` : undefined,
+    ...style
   };
 
   return (
@@ -99,7 +112,7 @@ const ImageWithFallback: React.FC<ImageWithFallbackProps> = ({
         onLoad={handleLoad}
         onError={handleError}
         decoding="async"
-        style={{ aspectRatio: width && height ? `${width}/${height}` : undefined }}
+        style={imageStyle}
       />
     </div>
   );
