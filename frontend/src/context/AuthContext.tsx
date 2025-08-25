@@ -1,4 +1,4 @@
-// src/context/AuthContext.tsx - Updated with activity tracking
+// src/context/AuthContext.tsx - Updated with avatar field and activity tracking
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from '../utils/axios';
 import userActivityService from '../services/userActivityService';
@@ -12,6 +12,7 @@ interface User {
   role?: string;
   token?: string;
   isAdmin?: boolean;
+  avatar?: string; // Added avatar field
 }
 
 interface AuthContextType {
@@ -21,6 +22,7 @@ interface AuthContextType {
   register: (name: string, email: string, password: string, phone: string, address: string) => Promise<User>;
   logout: () => void;
   setUser: (user: User | null) => void;
+  updateUserAvatar: (avatarUrl: string) => void; // Added method to update avatar
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -50,6 +52,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Add isAdmin flag based on email or role
       if (userData.email === 'admin@gmail.com' || userData.role === 'admin') {
         userData.isAdmin = true;
+      }
+      
+      // Ensure avatar field exists (can be null/undefined)
+      if (!userData.avatar) {
+        userData.avatar = null;
       }
       
       setUser(userData);
@@ -88,6 +95,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         userData.isAdmin = true;
       }
       
+      // Ensure avatar field exists (can be null/undefined)
+      if (!userData.avatar) {
+        userData.avatar = null;
+      }
+      
       setUser(userData);
       localStorage.setItem('user', JSON.stringify(userData));
       localStorage.setItem('token', userData.token);
@@ -123,8 +135,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.location.href = '/login';
   };
 
+  // Method to update user avatar
+  const updateUserAvatar = (avatarUrl: string) => {
+    if (user) {
+      const updatedUser = { ...user, avatar: avatarUrl };
+      setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, setUser }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      loading, 
+      login, 
+      register, 
+      logout, 
+      setUser,
+      updateUserAvatar 
+    }}>
       {children}
     </AuthContext.Provider>
   );
