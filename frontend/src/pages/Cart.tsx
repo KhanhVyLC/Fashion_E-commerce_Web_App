@@ -1,9 +1,14 @@
-// src/pages/Cart.tsx - Updated with selective checkout
+// src/pages/Cart.tsx
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { TrashIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { 
+  TrashIcon, 
+  ExclamationTriangleIcon,
+  FireIcon,
+  ClockIcon 
+} from '@heroicons/react/24/outline';
 import axios from '../utils/axios';
 
 interface StockIssue {
@@ -16,7 +21,7 @@ interface StockIssue {
 }
 
 const Cart: React.FC = () => {
-  const { items, totalPrice, updateQuantity, removeFromCart } = useCart();
+  const { items, totalPrice, totalDiscount, updateQuantity, removeFromCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [stockIssues, setStockIssues] = useState<StockIssue[]>([]);
@@ -36,8 +41,8 @@ const Cart: React.FC = () => {
 
   const checkStockAvailability = async () => {
     try {
-      const { data } = await axios.get('http://localhost:5000/api/cart/check-availability');
-      setStockIssues(data.unavailableItems);
+      const { data } = await axios.get('/cart/check-availability');
+      setStockIssues(data.unavailableItems || []);
     } catch (error) {
       console.error('Error checking stock:', error);
     }
@@ -84,7 +89,18 @@ const Cart: React.FC = () => {
   const getSelectedTotal = () => {
     return items
       .filter(item => selectedItems.has(item._id))
-      .reduce((total, item) => total + (item.product.price * item.quantity), 0);
+      .reduce((total, item) => total + (item.price * item.quantity), 0);
+  };
+
+  const getSelectedDiscount = () => {
+    return items
+      .filter(item => selectedItems.has(item._id))
+      .reduce((total, item) => {
+        if (item.isFlashSaleItem && item.originalPrice) {
+          return total + ((item.originalPrice - item.price) * item.quantity);
+        }
+        return total;
+      }, 0);
   };
 
   const handleCheckout = async () => {
@@ -100,10 +116,9 @@ const Cart: React.FC = () => {
 
     setCheckingStock(true);
     try {
-      const { data } = await axios.get('http://localhost:5000/api/cart/check-availability');
+      const { data } = await axios.get('/cart/check-availability');
       
-      // Check if selected items have stock issues
-      const selectedStockIssues = data.unavailableItems.filter((issue: StockIssue) => 
+      const selectedStockIssues = (data.unavailableItems || []).filter((issue: StockIssue) => 
         selectedItems.has(issue.itemId)
       );
 
@@ -113,7 +128,6 @@ const Cart: React.FC = () => {
         return;
       }
 
-      // Store selected items in session storage for checkout
       const selectedItemsData = items.filter(item => selectedItems.has(item._id));
       sessionStorage.setItem('checkoutItems', JSON.stringify(selectedItemsData));
       
@@ -130,6 +144,24 @@ const Cart: React.FC = () => {
     return stockIssues.find(issue => issue.itemId === itemId);
   };
 
+  const formatTimeRemaining = (endDate: string | Date) => {
+    const end = new Date(endDate);
+    const now = new Date();
+    const diff = end.getTime() - now.getTime();
+    
+    if (diff <= 0) return 'Đã kết thúc';
+    
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      return `Còn ${days} ngày`;
+    }
+    
+    return `Còn ${hours}h ${minutes}m`;
+  };
+
   if (items.length === 0) {
     return (
       <div className="text-center py-8">
@@ -142,6 +174,8 @@ const Cart: React.FC = () => {
   }
 
   const selectedCount = selectedItems.size;
+  const selectedTotal = getSelectedTotal();
+  const selectedDiscount = getSelectedDiscount();
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -164,7 +198,6 @@ const Cart: React.FC = () => {
       )}
 
       <div className="bg-white rounded-lg shadow-md">
-        {/* Select all header */}
         <div className="border-b p-4">
           <label className="flex items-center">
             <input
@@ -179,7 +212,6 @@ const Cart: React.FC = () => {
           </label>
         </div>
 
-        {/* Cart items */}
         <div className="p-6">
           {items.map((item) => {
             const stockIssue = getStockIssue(item._id);
@@ -197,20 +229,56 @@ const Cart: React.FC = () => {
                   className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500 mr-4"
                 />
                 
-                <img
-                  src={item.product.images[0] || '/placeholder.jpg'}
-                  alt={item.product.name}
-                  className="w-20 h-20 object-cover rounded"
-                />
+                <div className="relative">
+                  <img
+                    src={item.product.images[0] || '/placeholder.jpg'}
+                    alt={item.product.name}
+                    className="w-20 h-20 object-cover rounded"
+                  />
+                  {item.isFlashSaleItem && (
+                    <div className="absolute -top-2 -right-2 bg-red-500 rounded-full p-1">
+                      <FireIcon className="h-4 w-4 text-white" />
+                    </div>
+                  )}
+                </div>
                 
                 <div className="flex-1 ml-4">
                   <h3 className="font-semibold">{item.product.name}</h3>
                   <p className="text-gray-600">
                     Size: {item.size} | Màu: {item.color}
                   </p>
-                  <p className="text-lg font-bold text-red-600">
-                    {item.product.price.toLocaleString('vi-VN')}₫
-                  </p>
+                  
+                  {/* Flash Sale Badge */}
+                  {item.isFlashSaleItem && item.flashSaleInfo && (
+                    <div className="mt-1 inline-flex items-center space-x-2">
+                      <span className="bg-red-100 text-red-800 text-xs px-2 py-0.5 rounded-full font-medium">
+                        Flash Sale -{item.discountPercentage}%
+                      </span>
+                      <span className="text-xs text-gray-500 flex items-center">
+                        <ClockIcon className="h-3 w-3 mr-1" />
+                        {formatTimeRemaining(item.flashSaleInfo.endDate)}
+                      </span>
+                    </div>
+                  )}
+                  
+                  {/* Price Display */}
+                  <div className="mt-1 flex items-center space-x-2">
+                    <p className="text-lg font-bold text-red-600">
+                      {item.price.toLocaleString('vi-VN')}₫
+                    </p>
+                    {item.originalPrice && item.originalPrice !== item.price && (
+                      <p className="text-sm text-gray-500 line-through">
+                        {item.originalPrice.toLocaleString('vi-VN')}₫
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Savings Display */}
+                  {item.isFlashSaleItem && item.originalPrice && (
+                    <p className="text-xs text-green-600 font-medium">
+                      Tiết kiệm: {((item.originalPrice - item.price) * item.quantity).toLocaleString('vi-VN')}₫
+                    </p>
+                  )}
                   
                   {stockIssue && (
                     <p className="text-sm text-red-600 mt-1">
@@ -262,24 +330,50 @@ const Cart: React.FC = () => {
           })}
         </div>
 
-        {/* Summary */}
         <div className="bg-gray-50 p-6 rounded-b-lg">
           <div className="space-y-2">
             <div className="flex justify-between text-sm text-gray-600">
               <span>Đã chọn {selectedCount} sản phẩm</span>
             </div>
+            
+            {selectedDiscount > 0 && (
+              <>
+                <div className="flex justify-between text-sm">
+                  <span>Tạm tính (giá gốc):</span>
+                  <span>{(selectedTotal + selectedDiscount).toLocaleString('vi-VN')}₫</span>
+                </div>
+                <div className="flex justify-between text-sm text-green-600">
+                  <span className="flex items-center">
+                    <FireIcon className="h-4 w-4 mr-1" />
+                    Giảm giá Flash Sale:
+                  </span>
+                  <span>-{selectedDiscount.toLocaleString('vi-VN')}₫</span>
+                </div>
+              </>
+            )}
+            
             <div className="flex justify-between text-lg">
               <span>Tạm tính:</span>
-              <span>{getSelectedTotal().toLocaleString('vi-VN')}₫</span>
+              <span>{selectedTotal.toLocaleString('vi-VN')}₫</span>
             </div>
+            
             <div className="flex justify-between text-lg">
               <span>Phí vận chuyển:</span>
               <span>Miễn phí</span>
             </div>
+            
             <div className="border-t pt-2 flex justify-between text-xl font-bold">
               <span>Tổng cộng:</span>
-              <span className="text-red-600">{getSelectedTotal().toLocaleString('vi-VN')}₫</span>
+              <span className="text-red-600">{selectedTotal.toLocaleString('vi-VN')}₫</span>
             </div>
+            
+            {selectedDiscount > 0 && (
+              <div className="bg-green-50 p-2 rounded text-sm text-green-800">
+                <span className="font-medium">
+                  Bạn đã tiết kiệm {selectedDiscount.toLocaleString('vi-VN')}₫ từ Flash Sale!
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="mt-6 space-y-3">
