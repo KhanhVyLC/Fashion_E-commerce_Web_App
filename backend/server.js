@@ -1,7 +1,7 @@
 // backend/server.js - Fixed version with proper ENV loading and static files
 const dotenv = require('dotenv');
 dotenv.config();
-
+ 
 // Kiểm tra env đã load chưa
 console.log('Environment check at startup:');
 console.log('- NODE_ENV:', process.env.NODE_ENV || 'development');
