@@ -1,4 +1,4 @@
-// src/components/OptimizedImage.tsx - Component tối ưu cho việc load ảnh
+// src/components/OptimizedImage.tsx - Fixed version
 import React, { useState, useRef, useEffect } from 'react';
 
 interface OptimizedImageProps {
@@ -31,7 +31,6 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
   const [inView, setInView] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Intersection Observer for lazy loading
   useEffect(() => {
     if (!imgRef.current || loading === 'eager') {
       setInView(true);
@@ -47,35 +46,34 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
       },
       {
         threshold: 0.1,
-        rootMargin: '50px' // Load image 50px before it comes into view
+        rootMargin: '50px'
       }
     );
 
     observer.observe(imgRef.current);
-
     return () => observer.disconnect();
   }, [loading]);
 
-  // Generate optimized image URL
+  // FIXED: Handle local backend URLs properly
   const getOptimizedSrc = (originalSrc: string) => {
-    // If it's already a placeholder or optimized URL, return as is
-    if (originalSrc.includes('placeholder') || originalSrc.includes('?')) {
+    if (!originalSrc) return placeholder;
+    
+    // If it's already a full URL, return as is
+    if (originalSrc.startsWith('http://') || originalSrc.startsWith('https://')) {
       return originalSrc;
     }
-
-    // For external URLs (like Unsplash), add optimization parameters
-    if (originalSrc.includes('unsplash.com')) {
-      const params = new URLSearchParams();
-      if (width) params.append('w', width.toString());
-      if (height) params.append('h', height.toString());
-      params.append('q', quality.toString());
-      params.append('fm', 'webp');
-      params.append('auto', 'format');
-      
-      return `${originalSrc}&${params.toString()}`;
+    
+    // If it's a local path starting with /uploads, prepend backend URL
+    if (originalSrc.startsWith('/uploads')) {
+      return `http://localhost:5000${originalSrc}`;
     }
-
-    // For other external URLs, return as is
+    
+    // If it's a relative path without leading slash
+    if (!originalSrc.startsWith('/')) {
+      return `http://localhost:5000/${originalSrc}`;
+    }
+    
+    // For placeholder or other local assets
     return originalSrc;
   };
 
@@ -85,6 +83,7 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
   };
 
   const handleError = () => {
+    console.error('Image load error:', src);
     setImageError(true);
     onError?.();
   };
@@ -93,14 +92,12 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
 
   return (
     <div className={`relative overflow-hidden bg-gray-100 ${className}`} ref={imgRef}>
-      {/* Placeholder/Loading state */}
-      {!imageLoaded && (
+      {!imageLoaded && !imageError && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-200 animate-pulse">
           <div className="w-8 h-8 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
         </div>
       )}
 
-      {/* Actual image */}
       {inView && (
         <img
           src={imageSrc}
@@ -117,7 +114,6 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
         />
       )}
 
-      {/* Error state */}
       {imageError && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
           <div className="text-center text-gray-500">
